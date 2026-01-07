@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
 import { ChatCompletion, ChatModel } from 'openai/resources';
 import { promptConfig } from './constants';
+import { generatePlanResponseSchema } from './schemas';
 import { IGeneratePlanResponse } from './interfaces';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
@@ -36,5 +37,18 @@ export class OpenAIService {
     }
 
     return JSON.parse(content) as IGeneratePlanResponse;
+
+    // const validatedRes = this.validateGeneratePlanResponse(JSON.parse(content));
+    // return validatedRes;
+  }
+
+  validateGeneratePlanResponse(rawResponse: unknown) {
+    const parsed = generatePlanResponseSchema.safeParse(rawResponse);
+    if (!parsed.success) {
+      throw new Error(
+        `Wrong format response from OpenAI: ${JSON.stringify(parsed.error.issues)}`,
+      );
+    }
+    return parsed.data;
   }
 }

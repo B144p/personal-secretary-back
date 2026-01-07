@@ -27,9 +27,9 @@ export const promptConfig: IPromptConfig = {
               items: {
                 type: 'object',
                 properties: {
-                  day: { type: 'integer' },
+                  // day: { type: 'integer' },
                   title: { type: 'string' },
-                  objective: { type: 'string' },
+                  // objective: { type: 'string' },
                   tasks: {
                     type: 'array',
                     items: { type: 'string' },
@@ -45,9 +45,9 @@ export const promptConfig: IPromptConfig = {
                   },
                 },
                 required: [
-                  'day',
+                  // 'day',
                   'title',
-                  'objective',
+                  // 'objective',
                   'tasks',
                   'estimated_hours',
                   'priority',

@@ -1,0 +1,35 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Plan {
+  id         String   @id @default(uuid())
+  title      String
+  created_at DateTime @default(now())
+
+  tasks Task[]
+
+  @@map("plan")
+}
+
+model Task {
+  id              String   @id @default(uuid())
+  plan_id         String
+  title           String
+  estimated_hours Int
+  priority        String
+  status          String
+  created_at      DateTime @default(now())
+
+  plan Plan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+
+  // parent_id String
+
+  @@map("task")
+}
