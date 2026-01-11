@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { OpenaiModule } from './openai/openai.module';
 import { TaskModule } from './task/task.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { GoogleModule } from './google/google.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { PrismaModule } from './prisma/prisma.module';
     PrismaModule,
     TaskModule,
     OpenaiModule,
+    GoogleModule,
   ],
   controllers: [AppController],
   providers: [AppService],
