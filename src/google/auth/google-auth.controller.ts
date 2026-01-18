@@ -18,7 +18,7 @@ export class GoogleAuthController {
 
   @Get(GOOGLE_AUTH_CALLBACK_PATH)
   async authCallback(@Query('code') code: string, @Res() res: Response) {
-    await this.googleAuthService.exchangeCode(code);
+    await this.googleAuthService.googleLogin(code);
     return res.redirect(GOOGLE_LOGIN_SUCCESS_URL);
   }
 

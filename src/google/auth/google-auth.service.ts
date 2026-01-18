@@ -22,36 +22,85 @@ export class GoogleAuthService {
     });
   }
 
-  async exchangeCode(code: string): Promise<unknown> {
+  async googleLogin(code: string) {
+    const { tokens, profile } = await this.exchangeCode(code);
+
+    // Todo: using user exist instead => handle case token update
+    // No need to concern about performance => this flow is not active frequently.
+
+    if (tokens.refresh_token) {
+      console.log('register user');
+      return await this.registerUser({ tokens, profile });
+    } else {
+      console.log('update user info');
+      return await this.updateUser(profile);
+    }
+  }
+
+  async exchangeCode(code: string): Promise<IReturnExchangeCode> {
     const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
     const { tokens } = await client.getToken(code);
     client.setCredentials(tokens);
     const profile = await getGoogleProfile(client);
 
-    // return await this.upsertGoogleUser(profile, tokens);
     return { tokens, profile };
   }
 
-  upsertGoogleUser(
-    profile: IGoogleProfile,
-    tokens: OAuth2Client['credentials'],
-  ): unknown {
-    // Todo: store token to db
+  async registerUser({ tokens, profile }: IReturnExchangeCode) {
+    const { id, email, name, picture } = profile;
 
-    return { tokens, profile };
+    if (!id || !email) {
+      // Todo: maybe force consent for handle error
+      return 'user not found';
+    }
+
+    return this.prisma.user.create({
+      data: {
+        google_id: id,
+        email,
+        refresh_token: tokens.refresh_token!,
+        avartarUrl: picture || undefined,
+        name: name || '',
+      },
+    });
   }
 
-  async revokeToken(refresh_token: string): Promise<unknown> {
+  async updateUser({
+    id,
+    email,
+    name,
+    picture,
+  }: IReturnExchangeCode['profile']) {
+    if (!id) return 'Profile not found';
+
+    return this.prisma.user.update({
+      where: {
+        google_id: id,
+      },
+      data: {
+        name,
+        email: email || undefined,
+        avartarUrl: picture,
+      },
+    });
+  }
+
+  async userDelete(refresh_token: string): Promise<unknown> {
     const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
-    return await client.revokeToken(refresh_token);
+    client.setCredentials({ refresh_token });
+    const profile = await getGoogleProfile(client);
+
+    if (!profile.id) return 'Profile not found';
+
+    await client.revokeToken(refresh_token);
+    await this.prisma.user.delete({
+      where: { google_id: profile.id },
+    });
+    return 'User already deleted';
   }
+}
 
-  async userDelete(tokens: string) {
-    const revokeRes = await this.revokeToken(tokens);
-
-    // Todo: remove user from db
-    console.log('User already deleted');
-
-    return revokeRes;
-  }
+interface IReturnExchangeCode {
+  tokens: OAuth2Client['credentials'];
+  profile: IGoogleProfile;
 }
