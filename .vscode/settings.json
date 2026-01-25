@@ -1,2 +1,11 @@
 {
+  "editor.formatOnSave": true,
+  "editor.formatOnPaste": false,
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.codeActionsOnSave": {
+    // "source.fixAll": "always",
+    "source.organizeImports": "always"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
 }
