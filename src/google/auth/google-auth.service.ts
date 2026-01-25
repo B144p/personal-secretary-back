@@ -1,88 +1,52 @@
 import { Injectable } from '@nestjs/common';
-import {
-  CreateOAuthClient,
-  getGoogleProfile,
-  IGoogleProfile,
-  OAuth2Client,
-} from './google-auth.client';
-import { GOOGLE_AUTH_REDIRECT_URI } from '../google.constants';
+import { JwtService } from '@nestjs/jwt';
+import { User } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { GOOGLE_AUTH_REDIRECT_URI } from '../google.constants';
+import { CreateOAuthClient, getGoogleProfile } from './google-auth.client';
+import { IGoogleValidateUser } from './strategies/google.strategy';
 
 @Injectable()
 export class GoogleAuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+  ) {}
 
-  generateAuthUrl() {
-    const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
-
-    return client.generateAuthUrl({
-      access_type: 'offline',
-      // prompt: 'consent',
-      scope: ['https://www.googleapis.com/auth/calendar', 'profile', 'email'],
-    });
-  }
-
-  async googleLogin(code: string) {
-    const { tokens, profile } = await this.exchangeCode(code);
-
-    // Todo: using user exist instead => handle case token update
-    // No need to concern about performance => this flow is not active frequently.
-
-    if (tokens.refresh_token) {
-      console.log('register user');
-      return await this.registerUser({ tokens, profile });
-    } else {
-      console.log('update user info');
-      return await this.updateUser(profile);
-    }
-  }
-
-  async exchangeCode(code: string): Promise<IReturnExchangeCode> {
-    const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
-    const { tokens } = await client.getToken(code);
-    client.setCredentials(tokens);
-    const profile = await getGoogleProfile(client);
-
-    return { tokens, profile };
-  }
-
-  async registerUser({ tokens, profile }: IReturnExchangeCode) {
-    const { id, email, name, picture } = profile;
-
-    if (!id || !email) {
+  async loginWithGoogle(userDetail: IGoogleValidateUser) {
+    const { googleId, email, name, refreshToken, profileUrl } = userDetail;
+    if (!googleId || !email) {
       // Todo: maybe force consent for handle error
-      return 'user not found';
+      throw new Error('user not found');
     }
 
-    return this.prisma.user.create({
-      data: {
-        google_id: id,
+    const user = await this.prisma.user.upsert({
+      where: { google_id: googleId },
+      update: {
+        name,
         email,
-        refresh_token: tokens.refresh_token!,
-        avartarUrl: picture || undefined,
-        name: name || '',
+        avartarUrl: profileUrl,
+        refresh_token: refreshToken || undefined,
+      },
+      create: {
+        google_id: googleId,
+        name,
+        email,
+        avartarUrl: profileUrl,
+        refresh_token: refreshToken || '',
       },
     });
+    const jwt = this.googleSignJwt(user);
+
+    return jwt;
   }
 
-  async updateUser({
-    id,
-    email,
-    name,
-    picture,
-  }: IReturnExchangeCode['profile']) {
-    if (!id) return 'Profile not found';
-
-    return this.prisma.user.update({
-      where: {
-        google_id: id,
-      },
-      data: {
-        name,
-        email: email || undefined,
-        avartarUrl: picture,
-      },
+  googleSignJwt(user: User) {
+    const jwt = this.jwtService.sign({
+      sub: user.id,
+      email: user.email,
     });
+    return jwt;
   }
 
   async userDelete(refresh_token: string): Promise<unknown> {
@@ -90,7 +54,7 @@ export class GoogleAuthService {
     client.setCredentials({ refresh_token });
     const profile = await getGoogleProfile(client);
 
-    if (!profile.id) return 'Profile not found';
+    if (!profile.id) throw new Error('Profile not found');
 
     await client.revokeToken(refresh_token);
     await this.prisma.user.delete({
@@ -98,9 +62,4 @@ export class GoogleAuthService {
     });
     return 'User already deleted';
   }
-}
-
-interface IReturnExchangeCode {
-  tokens: OAuth2Client['credentials'];
-  profile: IGoogleProfile;
 }
