@@ -1,28 +1,65 @@
 import { Injectable } from '@nestjs/common';
-import { CreateOAuthClient } from './google-auth.client';
+import { JwtService } from '@nestjs/jwt';
+import { User } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { GOOGLE_AUTH_REDIRECT_URI } from '../google.constants';
+import { CreateOAuthClient, getGoogleProfile } from './google-auth.client';
+import { IGoogleValidateUser } from './strategies/google.strategy';
 
 @Injectable()
 export class GoogleAuthService {
-  constructor() {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+  ) {}
 
-  generateAuthUrl() {
-    const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
+  async loginWithGoogle(userDetail: IGoogleValidateUser) {
+    const { googleId, email, name, refreshToken, profileUrl } = userDetail;
+    if (!googleId || !email) {
+      // Todo: maybe force consent for handle error
+      throw new Error('user not found');
+    }
 
-    console.log('generatinh google auth url');
-
-    return client.generateAuthUrl({
-      access_type: 'offline',
-      prompt: 'consent',
-      scope: ['https://www.googleapis.com/auth/calendar'],
+    const user = await this.prisma.user.upsert({
+      where: { google_id: googleId },
+      update: {
+        name,
+        email,
+        avartarUrl: profileUrl,
+        refresh_token: refreshToken || undefined,
+      },
+      create: {
+        google_id: googleId,
+        name,
+        email,
+        avartarUrl: profileUrl,
+        refresh_token: refreshToken || '',
+      },
     });
+    const jwt = this.googleSignJwt(user);
+
+    return jwt;
   }
 
-  async exchangeCode(code: string): Promise<unknown> {
+  googleSignJwt(user: User) {
+    const jwt = this.jwtService.sign({
+      sub: user.id,
+      email: user.email,
+    });
+    return jwt;
+  }
+
+  async userDelete(refresh_token: string): Promise<unknown> {
     const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
+    client.setCredentials({ refresh_token });
+    const profile = await getGoogleProfile(client);
 
-    const { tokens } = await client.getToken(code);
+    if (!profile.id) throw new Error('Profile not found');
 
-    return tokens;
+    await client.revokeToken(refresh_token);
+    await this.prisma.user.delete({
+      where: { google_id: profile.id },
+    });
+    return 'User already deleted';
   }
 }

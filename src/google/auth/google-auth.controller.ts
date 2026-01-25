@@ -1,29 +1,43 @@
-import { Controller, Get, Query, Res } from '@nestjs/common';
-import { GoogleAuthService } from './google-auth.service';
-import { Response } from 'express';
 import {
-  GOOGLE_AUTH_PREFIX,
+  Body,
+  Controller,
+  Get,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+import { Request, Response } from 'express';
+import {
   GOOGLE_AUTH_CALLBACK_PATH,
+  GOOGLE_AUTH_PREFIX,
   GOOGLE_LOGIN_SUCCESS_URL,
+  GOOGLE_STRATEGY_NAME,
 } from '../google.constants';
+import { GoogleAuthService } from './google-auth.service';
+import { IGoogleValidateUser } from './strategies/google.strategy';
 
 @Controller(GOOGLE_AUTH_PREFIX)
 export class GoogleAuthController {
   constructor(private readonly googleAuthService: GoogleAuthService) {}
 
   @Get()
-  generateAuthUrl(@Res() res: Response) {
-    return res.redirect(this.googleAuthService.generateAuthUrl());
-  }
+  @UseGuards(AuthGuard(GOOGLE_STRATEGY_NAME))
+  generateAuthUrlPassport() {}
 
   @Get(GOOGLE_AUTH_CALLBACK_PATH)
-  async authCallback(@Query('code') code: string, @Res() res: Response) {
-    console.log('code', code);
-    const tokens = await this.googleAuthService.exchangeCode(code);
-    console.log('tokens', tokens);
+  @UseGuards(AuthGuard(GOOGLE_STRATEGY_NAME))
+  async authCallbackPassport(@Req() req: Request, @Res() res: Response) {
+    const jwt = await this.googleAuthService.loginWithGoogle(
+      req.user as IGoogleValidateUser,
+    );
 
-    // Todo: store token to db
+    return res.redirect(`${GOOGLE_LOGIN_SUCCESS_URL}?token=${jwt}`);
+  }
 
-    return res.redirect(GOOGLE_LOGIN_SUCCESS_URL);
+  @Post('delete')
+  deleteUser(@Body() body: { refresh_token: string }) {
+    return this.googleAuthService.userDelete(body.refresh_token);
   }
 }
