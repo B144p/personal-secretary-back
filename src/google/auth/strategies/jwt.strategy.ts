@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
+import { IJwtSignData } from 'src/utils';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY_NAME) {
@@ -12,12 +13,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY_NAME) {
     });
   }
 
-  validate(payload: IJwtValidateProps) {
+  validate(payload: IJwtSignData) {
     return payload;
   }
-}
-
-interface IJwtValidateProps {
-  sub: string;
-  email: string;
 }
