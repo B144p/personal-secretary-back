@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Client } from '@notionhq/client';
+import { getRequiredEnv } from 'src/utils';
 import { NotionPage } from './interfaces';
 
 @Injectable()
@@ -8,8 +9,8 @@ export class NotionService {
   private databaseId: string;
 
   constructor() {
-    this.notion = new Client({ auth: process.env.NOTION_API_KEY });
-    this.databaseId = process.env.NOTION_DATABASE_ID ?? '';
+    this.notion = new Client({ auth: getRequiredEnv('NOTION_API_KEY') });
+    this.databaseId = getRequiredEnv('NOTION_DATABASE_ID');
   }
 
   async insertPages(pages: NotionPage[]) {
