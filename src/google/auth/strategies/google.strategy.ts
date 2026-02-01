@@ -2,9 +2,10 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { Profile, Strategy, VerifyCallback } from 'passport-google-oauth20';
 import {
-  GOOGLE_AUTH_REDIRECT_URI,
+  getGoogleAuthRedirectUri,
   GOOGLE_STRATEGY_NAME,
 } from 'src/google/google.constants';
+import { getRequiredEnv } from 'src/utils';
 
 @Injectable()
 export class GoogleStrategy extends PassportStrategy(
@@ -13,9 +14,9 @@ export class GoogleStrategy extends PassportStrategy(
 ) {
   constructor() {
     super({
-      clientID: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      callbackURL: GOOGLE_AUTH_REDIRECT_URI,
+      clientID: getRequiredEnv('GOOGLE_CLIENT_ID'),
+      clientSecret: getRequiredEnv('GOOGLE_CLIENT_SECRET'),
+      callbackURL: getGoogleAuthRedirectUri(),
       scope: ['https://www.googleapis.com/auth/calendar', 'profile', 'email'],
     });
   }

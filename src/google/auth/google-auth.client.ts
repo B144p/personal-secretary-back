@@ -1,10 +1,18 @@
 import { google } from 'googleapis';
+import { getRequiredEnv } from 'src/utils';
 
 export const CreateOAuthClient = (redirectUri: string): OAuth2Client => {
   return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
+    getRequiredEnv('GOOGLE_CLIENT_ID'),
+    getRequiredEnv('GOOGLE_CLIENT_SECRET'),
     redirectUri,
+  );
+};
+
+export const getGoogleClient = (): OAuth2Client => {
+  return new google.auth.OAuth2(
+    getRequiredEnv('GOOGLE_CLIENT_ID'),
+    getRequiredEnv('GOOGLE_CLIENT_SECRET'),
   );
 };
 
@@ -14,4 +22,3 @@ export const getGoogleProfile = async (client: OAuth2Client) => {
 };
 
 export type OAuth2Client = InstanceType<typeof google.auth.OAuth2>;
-export type IGoogleProfile = Awaited<ReturnType<typeof getGoogleProfile>>;

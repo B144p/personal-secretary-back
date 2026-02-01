@@ -1,34 +1,34 @@
 import { Injectable } from '@nestjs/common';
-import { calendar_v3, google } from 'googleapis';
+import { UserService } from 'src/user/user.service';
+import { getCalendarClient } from './calendar.client';
 import { CalendarEvent } from './interfaces';
 
 @Injectable()
 export class CalendarService {
-  private calendar: calendar_v3.Calendar;
+  constructor(private readonly userService: UserService) {}
 
-  constructor() {
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-    );
-    oauth2Client.setCredentials({
-      refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-    });
-
-    this.calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  insertEvents(events: CalendarEvent[]) {
+    console.log('Insert event:', events);
+    // for (const ev of events) {
+    //   await this.calendar.events.insert({
+    //     calendarId: 'primary',
+    //     requestBody: {
+    //       summary: ev.title,
+    //       description: ev.description,
+    //       start: { dateTime: ev.start.toISOString(), timeZone: 'Asia/Bangkok' },
+    //       end: { dateTime: ev.end.toISOString(), timeZone: 'Asia/Bangkok' },
+    //     },
+    //   });
+    // }
   }
 
-  async insertEvents(events: CalendarEvent[]) {
-    for (const ev of events) {
-      await this.calendar.events.insert({
-        calendarId: 'primary',
-        requestBody: {
-          summary: ev.title,
-          description: ev.description,
-          start: { dateTime: ev.start.toISOString(), timeZone: 'Asia/Bangkok' },
-          end: { dateTime: ev.end.toISOString(), timeZone: 'Asia/Bangkok' },
-        },
-      });
-    }
+  async getCalendarList(id: string): Promise<unknown> {
+    const user = await this.userService.getProfile(id);
+    const calendarClient = getCalendarClient(user.refresh_token);
+    const calendarList = calendarClient.events.list({
+      calendarId: 'primary',
+    });
+
+    return calendarList;
   }
 }

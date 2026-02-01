@@ -2,7 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { User } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { GOOGLE_AUTH_REDIRECT_URI } from '../google.constants';
+import { IJwtSignData } from 'src/utils';
+import { getGoogleAuthRedirectUri } from '../google.constants';
 import { CreateOAuthClient, getGoogleProfile } from './google-auth.client';
 import { IGoogleValidateUser } from './strategies/google.strategy';
 
@@ -42,15 +43,15 @@ export class GoogleAuthService {
   }
 
   googleSignJwt(user: User) {
-    const jwt = this.jwtService.sign({
+    const jwtSignData: IJwtSignData = {
       sub: user.id,
       email: user.email,
-    });
-    return jwt;
+    };
+    return this.jwtService.sign(jwtSignData);
   }
 
   async userDelete(refresh_token: string): Promise<unknown> {
-    const client = CreateOAuthClient(GOOGLE_AUTH_REDIRECT_URI);
+    const client = CreateOAuthClient(getGoogleAuthRedirectUri());
     client.setCredentials({ refresh_token });
     const profile = await getGoogleProfile(client);
 
