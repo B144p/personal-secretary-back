@@ -1,11 +1,12 @@
 import { google } from 'googleapis';
 import { getRequiredEnv } from 'src/utils';
+import { getGoogleAuthRedirectUri } from '../google.constants';
 
-export const CreateOAuthClient = (redirectUri: string): OAuth2Client => {
+export const CreateOAuthClient = (): OAuth2Client => {
   return new google.auth.OAuth2(
     getRequiredEnv('GOOGLE_CLIENT_ID'),
     getRequiredEnv('GOOGLE_CLIENT_SECRET'),
-    redirectUri,
+    getGoogleAuthRedirectUri(),
   );
 };
 
