@@ -42,7 +42,25 @@ model Task {
 
   plan Plan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
 
-  // parent_id String
-
   @@map("task")
+}
+
+model CategoryRule {
+  id       String         @id @default(uuid())
+  keyword  String
+  category EEventCategory @default(UNKNOWN)
+  tags     String[]
+  createAt DateTime       @default(now())
+  updateAt DateTime       @updatedAt
+
+  @@map("category_rule")
+}
+
+enum EEventCategory {
+  DEEP_WORK
+  MEETING
+  CHORE
+  HEALTH
+  PERSONAL
+  UNKNOWN
 }

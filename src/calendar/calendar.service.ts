@@ -1,13 +1,17 @@
 import { Injectable } from '@nestjs/common';
+import { EEventCategory } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
-import { EEventCategory } from './constants';
 import { CalendarEvent } from './interfaces';
 import { categorizeMockup } from './mocks';
 
 @Injectable()
 export class CalendarService {
-  constructor(private readonly userService: UserService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly userService: UserService,
+  ) {}
 
   insertEvents(events: CalendarEvent[]) {
     console.log('Insert event:', events);
@@ -24,9 +28,9 @@ export class CalendarService {
     // }
   }
 
-  classifyEvent() {
+  async classifyEvent() {
     const events = categorizeMockup.eventSummary;
-    const categoryRule = categorizeMockup.categoryRule;
+    const categoryRule = await this.prisma.categoryRule.findMany();
 
     const categorizedEvent = events.map((event) => {
       const matchedRule = categoryRule
