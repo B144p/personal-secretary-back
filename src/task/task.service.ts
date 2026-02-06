@@ -41,4 +41,8 @@ export class TaskService {
   getCalendarList(id: string) {
     return this.calendarService.getCalendarList(id);
   }
+
+  categorizeCalendarEvent() {
+    return this.calendarService.classifyEvent();
+  }
 }

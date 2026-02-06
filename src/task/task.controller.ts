@@ -20,4 +20,10 @@ export class TaskController {
   getCalendarList(@Req() req: Request) {
     return this.taskService.getCalendarList(validateJwtPayload(req.user).sub);
   }
+
+  @Post('calendar/categorize')
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  categorizeCalendarEvent() {
+    return this.taskService.categorizeCalendarEvent();
+  }
 }

@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
+import { EEventCategory } from './constants';
 import { CalendarEvent } from './interfaces';
+import { categorizeMockup } from './mocks';
 
 @Injectable()
 export class CalendarService {
@@ -20,6 +22,36 @@ export class CalendarService {
     //     },
     //   });
     // }
+  }
+
+  classifyEvent() {
+    const events = categorizeMockup.eventSummary;
+    const categoryRule = categorizeMockup.categoryRule;
+
+    const categorizedEvent = events.map((event) => {
+      const matchedRule = categoryRule
+        .filter((rule) =>
+          event.toLowerCase().includes(rule.keyword.toLowerCase()),
+        )
+        .sort((a, b) => b.keyword.length - a.keyword.length);
+
+      if (matchedRule.length > 0) {
+        return {
+          ...matchedRule[0],
+          summary: event,
+        };
+      }
+
+      // In case of no matched rule => let LLM to categorize
+      return {
+        summary: event,
+        keyword: '',
+        category: EEventCategory.UNKNOWN,
+        tags: [],
+      };
+    });
+
+    return categorizedEvent;
   }
 
   async getCalendarList(id: string): Promise<unknown> {
