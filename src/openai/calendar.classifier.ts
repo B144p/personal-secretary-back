@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
 import { z } from 'zod';
 import { classifyRulesPrompt } from './prompt/calendar.prompt';
-import { CategoryRuleSchema } from './schemas';
+import { CategoryRulesSchema } from './schemas';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
@@ -47,7 +47,7 @@ export const classifyEventCategories = async ({
         type: 'json_schema',
         name: 'category_rule',
         strict: true,
-        schema: z.toJSONSchema(CategoryRuleSchema),
+        schema: z.toJSONSchema(CategoryRulesSchema),
       },
     },
   });
