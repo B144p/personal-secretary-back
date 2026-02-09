@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export { CategoryRulesSchema as CategoryRuleSchema } from './calendar';
+
 export const generatePlanResponseSchema = z.object({
   goal: z.string(),
   duration_days: z.number(),

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EEventCategory } from '@prisma/client';
+import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
@@ -11,6 +12,7 @@ export class CalendarService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
+    private readonly openAIService: OpenAIService,
   ) {}
 
   insertEvents(events: CalendarEvent[]) {
@@ -26,6 +28,10 @@ export class CalendarService {
     //     },
     //   });
     // }
+  }
+
+  classifyRules() {
+    return this.openAIService.classifyRules();
   }
 
   async classifyEvent() {

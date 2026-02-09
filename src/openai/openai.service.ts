@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
 import { ChatCompletion, ChatModel } from 'openai/resources';
+import { categorizeMockup } from 'src/calendar/mocks';
+import { classifyEventCategories } from './calendar.classifier';
 import { promptConfig } from './constants';
-import { generatePlanResponseSchema } from './schemas';
 import { IGeneratePlanResponse } from './interfaces';
+import { generatePlanResponseSchema } from './schemas';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
@@ -50,5 +52,12 @@ export class OpenAIService {
       );
     }
     return parsed.data;
+  }
+
+  async classifyRules() {
+    return await classifyEventCategories({
+      client: this.openai,
+      summaries: categorizeMockup.eventSummary,
+    });
   }
 }

@@ -45,4 +45,8 @@ export class TaskService {
   categorizeCalendarEvent() {
     return this.calendarService.classifyEvent();
   }
+
+  classifyRules() {
+    return this.calendarService.classifyRules();
+  }
 }

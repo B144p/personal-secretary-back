@@ -26,4 +26,10 @@ export class TaskController {
   categorizeCalendarEvent() {
     return this.taskService.categorizeCalendarEvent();
   }
+
+  @Post('openAI')
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  classifyRules() {
+    return this.taskService.classifyRules();
+  }
 }
