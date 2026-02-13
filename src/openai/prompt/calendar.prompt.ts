@@ -18,12 +18,23 @@ Output JSON schema each event:
 {
   "results": [
     {
-      "keyword": a short canonical phrase (1-4 words) that captures the event's intent (no venue or date).,
+      "keyword": a short canonical phrase (1-5 words) that captures the event's intent (no venue or date).,
       "category": one of ${concatCategoryEnumString.all()},
       "tags": string[],
     }
   ]
 }
+`;
+
+const keywordRules = `
+  Keyword rules:
+  - "keyword" is NOT the summary
+  - "keyword" is a canonical that represents the core intent
+  - Use 1–5 lowercase words only
+  - No spaces at the beginning or end
+  - Must relate with tags[]
+
+  If no clear canonical keyword exists, use "unknown".
 `;
 
 const decisionRules = `
@@ -41,6 +52,7 @@ const classifyInput = (summaries: string[]) =>
 export const classifyRulesPrompt = {
   instruction,
   classifyInput,
+  keywordRules,
   decisionRules,
   explainOutputSchema,
 };

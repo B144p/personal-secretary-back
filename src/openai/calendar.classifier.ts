@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
 import { z } from 'zod';
-import { classifyRulesPrompt } from './prompt/calendar.prompt';
+import { classifyRulesPrompt } from './prompt';
 import { CategoryRulesSchema } from './schemas';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
@@ -18,17 +18,8 @@ export const classifyEventCategories = async ({
         role: 'system',
         content: [
           { type: 'input_text', text: classifyRulesPrompt.instruction },
-        ],
-      },
-      {
-        role: 'system',
-        content: [
           { type: 'input_text', text: classifyRulesPrompt.explainOutputSchema },
-        ],
-      },
-      {
-        role: 'system',
-        content: [
+          { type: 'input_text', text: classifyRulesPrompt.keywordRules },
           { type: 'input_text', text: classifyRulesPrompt.decisionRules },
         ],
       },
@@ -51,7 +42,34 @@ export const classifyEventCategories = async ({
       },
     },
   });
-  return llmRes.output_parsed;
+
+  const outputParsed = validateCategoryRuleResponse(llmRes.output_parsed);
+  const outputFormat = {
+    ...outputParsed,
+    results: outputParsed.results.map((result, index) => ({
+      ...result,
+      summary: summaries[index],
+    })),
+  };
+
+  return {
+    usage: llmRes.usage,
+    outputFormat,
+  };
+};
+
+const validateCategoryRuleResponse = (rawResponse: unknown) => {
+  if (!rawResponse) {
+    throw new Error('Response from OpenAI is null');
+  }
+
+  const parsed = CategoryRulesSchema.safeParse(rawResponse);
+  if (!parsed.success) {
+    throw new Error(
+      `Wrong format response from OpenAI: ${JSON.stringify(parsed.error.issues)}`,
+    );
+  }
+  return parsed.data;
 };
 
 interface IClassifyEventCategoriesProps {

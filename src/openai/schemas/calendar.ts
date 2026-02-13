@@ -10,3 +10,5 @@ const CategoryRuleSchema = z.object({
 export const CategoryRulesSchema = z.object({
   results: z.array(CategoryRuleSchema),
 });
+
+export type ICategoryRulesResponse = z.infer<typeof CategoryRulesSchema>;
