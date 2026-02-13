@@ -46,14 +46,23 @@ model Task {
 }
 
 model CategoryRule {
-  id       String         @id @default(uuid())
-  keyword  String
-  category EEventCategory @default(UNKNOWN)
-  tags     String[]
-  createAt DateTime       @default(now())
-  updateAt DateTime       @updatedAt
+  id       String            @id @default(uuid())
+  keyword  String            @unique
+  category EEventCategory    @default(UNKNOWN)
+  tags     CategoryRuleTag[]
+  createAt DateTime          @default(now())
+  updateAt DateTime          @updatedAt
 
   @@map("category_rule")
+}
+
+model CategoryRuleTag {
+  id             String       @id @default(uuid())
+  tag            String
+  categoryRuleId String
+  categoryRule   CategoryRule @relation(fields: [categoryRuleId], references: [id])
+
+  @@map("category_rule_tag")
 }
 
 enum EEventCategory {
