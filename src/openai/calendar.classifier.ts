@@ -1,12 +1,35 @@
+import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { z } from 'zod';
 import { classifyRulesPrompt } from './prompt';
-import { CategoryRulesSchema } from './schemas';
+import { CategoryRulesSchema, ICategoryRulesResponse } from './schemas';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
-export const classifyEventCategories = async ({
+@Injectable()
+export class CalendarClassifierService {
+  constructor(
+    private readonly openai: OpenAI,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  async classifyEvent(summaries: string[]) {
+    const classifiedEvent = await classifyEventWithOpenAI({
+      client: this.openai,
+      summaries,
+    });
+    const createCategoryRuleRes = await upsertCategoryRule({
+      client: this.prisma,
+      rules: classifiedEvent.outputFormat,
+    });
+
+    return createCategoryRuleRes;
+  }
+}
+
+const classifyEventWithOpenAI = async ({
   client,
   summaries,
 }: IClassifyEventCategoriesProps) => {
@@ -18,7 +41,10 @@ export const classifyEventCategories = async ({
         role: 'system',
         content: [
           { type: 'input_text', text: classifyRulesPrompt.instruction },
-          { type: 'input_text', text: classifyRulesPrompt.explainOutputSchema },
+          {
+            type: 'input_text',
+            text: classifyRulesPrompt.explainOutputSchema,
+          },
           { type: 'input_text', text: classifyRulesPrompt.keywordRules },
           { type: 'input_text', text: classifyRulesPrompt.decisionRules },
         ],
@@ -72,7 +98,38 @@ const validateCategoryRuleResponse = (rawResponse: unknown) => {
   return parsed.data;
 };
 
+const upsertCategoryRule = async ({
+  client,
+  rules,
+}: ICreateCategoryRuleProps) => {
+  return await Promise.all(
+    rules.results.map(({ keyword, category, tags }) => {
+      return client.categoryRule.upsert({
+        where: { keyword },
+        create: {
+          keyword,
+          category,
+          tags: tags?.length
+            ? { create: tags.map((tag) => ({ tag })) }
+            : undefined,
+        },
+        update: {
+          tags: {
+            deleteMany: {},
+            create: tags.map((tag) => ({ tag })),
+          },
+        },
+      });
+    }),
+  );
+};
+
 interface IClassifyEventCategoriesProps {
   client: OpenAI;
   summaries: string[];
+}
+
+interface ICreateCategoryRuleProps {
+  client: PrismaService;
+  rules: ICategoryRulesResponse;
 }
