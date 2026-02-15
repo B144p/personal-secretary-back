@@ -102,26 +102,57 @@ const upsertCategoryRule = async ({
   client,
   rules,
 }: ICreateCategoryRuleProps) => {
-  return await Promise.all(
-    rules.results.map(({ keyword, category, tags }) => {
-      return client.categoryRule.upsert({
-        where: { keyword },
-        create: {
-          keyword,
-          category,
-          tags: tags?.length
-            ? { create: tags.map((tag) => ({ tag })) }
-            : undefined,
-        },
-        update: {
-          tags: {
-            deleteMany: {},
-            create: tags.map((tag) => ({ tag })),
+  const createCategoryRuleTags = async (tags: string[]) => {
+    return await client.categoryRuleTag.createMany({
+      data: tags.map((tag) => ({ tag })),
+      skipDuplicates: true,
+    });
+  };
+
+  const findIdCategoryRuleTags = async (tags: string[]) => {
+    return await client.categoryRuleTag.findMany({
+      where: {
+        tag: { in: tags },
+      },
+      select: { id: true },
+    });
+  };
+
+  const createCategoryRule = async ({
+    keyword,
+    category,
+    tags,
+  }: ICategoryRulesResponse['results'][number]) => {
+    await createCategoryRuleTags(tags);
+    const tagIdRecords = await findIdCategoryRuleTags(tags);
+    return await client.categoryRule.upsert({
+      where: { keyword },
+      create: {
+        keyword,
+        category,
+        keywordTags: {
+          createMany: {
+            data: tagIdRecords.map(({ id }) => ({ tagId: id })),
+            skipDuplicates: true,
           },
         },
-      });
-    }),
+      },
+      update: {
+        keywordTags: {
+          createMany: {
+            data: tagIdRecords.map(({ id }) => ({ tagId: id })),
+            skipDuplicates: true,
+          },
+        },
+      },
+    });
+  };
+
+  const createdRules = await Promise.all(
+    rules.results.map((data) => createCategoryRule(data)),
   );
+
+  return { results: createdRules, count: createdRules.length };
 };
 
 interface IClassifyEventCategoriesProps {
