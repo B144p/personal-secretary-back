@@ -1,4 +1,9 @@
-export { CategoryRulesSchema, ICategoryRulesResponse } from './calendar';
+export {
+  CalendarGeneratorSchema,
+  CategoryRulesSchema,
+  ICalendarGeneratorResultResponse,
+  ICategoryRulesResponse,
+} from './calendar';
 export {
   generatePlanResponseSchema,
   IGeneratePlanResponse,

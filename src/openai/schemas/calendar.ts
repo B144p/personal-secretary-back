@@ -12,3 +12,11 @@ export const CategoryRulesSchema = z.object({
 });
 
 export type ICategoryRulesResponse = z.infer<typeof CategoryRulesSchema>;
+
+export const CalendarGeneratorSchema = z.object({
+  results: z.array(z.string()),
+});
+
+export type ICalendarGeneratorResultResponse = z.infer<
+  typeof CalendarGeneratorSchema
+>;

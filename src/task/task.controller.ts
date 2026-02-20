@@ -15,6 +15,8 @@ export class TaskController {
     return this.taskService.generate(generateTaskDto);
   }
 
+  // TODO: Remove when feature done
+  // ================== Open endpoint for test only (START) ==================
   @Get('calendar/list')
   @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   getCalendarList(@Req() req: Request) {
@@ -31,5 +33,12 @@ export class TaskController {
   @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   classifyRules() {
     return this.taskService.classifyRules();
+  }
+
+  // ================== Open endpoint for test only (END) ==================
+  @Post('calendar/generate_rule')
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  generateCalendarRule() {
+    return this.taskService.generateCalendarRule();
   }
 }

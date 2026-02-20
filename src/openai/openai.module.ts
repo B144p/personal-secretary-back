@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { CalendarClassifierService } from './calendar.classifier';
+import { CalendarGeneratorService } from './calendar.generate';
 import { OpenAIService } from './openai.service';
 
 @Global()
@@ -19,6 +20,7 @@ import { OpenAIService } from './openai.service';
     },
     OpenAIService,
     CalendarClassifierService,
+    CalendarGeneratorService,
   ],
   exports: [OpenAIService],
 })

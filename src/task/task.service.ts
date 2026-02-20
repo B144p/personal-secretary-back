@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CalendarService } from 'src/calendar/calendar.service';
+import { categorizeMockup } from 'src/calendar/mocks';
 import { OpenAIService } from 'src/openai/openai.service';
 import { GenerateTaskDto } from './dto/create-task.dto';
 import { mapToGoogleCalendar } from './utils';
@@ -43,10 +44,14 @@ export class TaskService {
   }
 
   categorizeCalendarEvent() {
-    return this.calendarService.classifyEvent();
+    return this.calendarService.classifyEvent(categorizeMockup.eventSummary);
   }
 
   classifyRules() {
     return this.calendarService.classifyRules();
+  }
+
+  generateCalendarRule() {
+    return this.calendarService.generateCalendarRule();
   }
 }

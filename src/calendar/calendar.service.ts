@@ -5,7 +5,6 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
 import { CalendarEvent } from './interfaces';
-import { categorizeMockup } from './mocks';
 
 @Injectable()
 export class CalendarService {
@@ -34,34 +33,58 @@ export class CalendarService {
     return this.openAIService.classifyRules();
   }
 
-  async classifyEvent() {
-    const events = categorizeMockup.eventSummary;
-    const categoryRule = await this.prisma.categoryRule.findMany();
+  generateCalendarRule() {
+    return this.openAIService.generateCategoryRules();
+  }
 
-    const categorizedEvent = events.map((event) => {
-      const matchedRule = categoryRule
-        .filter((rule) =>
-          event.toLowerCase().includes(rule.keyword.toLowerCase()),
-        )
-        .sort((a, b) => b.keyword.length - a.keyword.length);
-
-      if (matchedRule.length > 0) {
-        return {
-          ...matchedRule[0],
-          summary: event,
-        };
-      }
-
-      // In case of no matched rule => let LLM to categorize
-      return {
-        summary: event,
-        keyword: '',
-        category: EEventCategory.UNKNOWN,
-        tags: [],
-      };
+  async classifyEvent(events: string[]): Promise<unknown> {
+    const categoryRule = await this.prisma.categoryRule.findMany({
+      select: { id: true, keyword: true, category: true },
     });
 
-    return categorizedEvent;
+    const categorizedEvent = events.reduce(
+      (acc: ICategoryRules, event) => {
+        const matchedRule = categoryRule
+          .filter((rule) =>
+            event.toLowerCase().includes(rule.keyword.toLowerCase()),
+          )
+          .sort((a, b) => b.keyword.length - a.keyword.length);
+
+        if (matchedRule.length > 0) {
+          acc.rule.push({
+            ...matchedRule[0],
+            matchedRule: matchedRule.map(({ keyword, category }) => ({
+              keyword,
+              category,
+            })),
+            summary: event,
+          });
+        }
+
+        // In case of no matched rule => let LLM to categorize
+        else
+          acc.ai.push({
+            summary: event,
+            keyword: '',
+            category: EEventCategory.UNKNOWN,
+            tags: [],
+          });
+
+        return acc;
+      },
+      {
+        rule: [],
+        ai: [],
+      },
+    );
+
+    return {
+      ...categorizedEvent,
+      count: {
+        rule: categorizedEvent.rule.length,
+        ai: categorizedEvent.ai.length,
+      },
+    };
   }
 
   async getCalendarList(id: string): Promise<unknown> {
@@ -73,4 +96,15 @@ export class CalendarService {
 
     return calendarList;
   }
+}
+
+interface ICategoryRules {
+  rule: Array<IRuleBase & { id: string; matchedRule: unknown[] }>;
+  ai: Array<IRuleBase & { tags: string[] }>;
+}
+
+interface IRuleBase {
+  keyword: string;
+  category: EEventCategory;
+  summary: string;
 }
