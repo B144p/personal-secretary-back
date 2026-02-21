@@ -75,8 +75,8 @@ model CategoryRuleKeywordTag {
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
 
-  categoryRule CategoryRule    @relation(fields: [categoryRuleId], references: [id])
-  tag          CategoryRuleTag @relation(fields: [tagId], references: [id])
+  categoryRule CategoryRule    @relation(fields: [categoryRuleId], references: [id], onDelete: Cascade)
+  tag          CategoryRuleTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([categoryRuleId, tagId])
   @@map("category_rule_keyword_tag")
