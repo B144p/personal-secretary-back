@@ -28,6 +28,7 @@ Output JSON schema each event:
 
 const keywordRules = `
   Keyword rules:
+  - "keyword" is NOT empty string
   - "keyword" is NOT the summary
   - "keyword" is a canonical that represents the core intent
   - Use 1–5 lowercase words only

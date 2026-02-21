@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
-import { categorizeMockup } from 'src/calendar/mocks';
 import { CalendarClassifierService } from './calendar.classifier';
 import {
   CalendarGeneratorService,
@@ -23,10 +22,8 @@ export class OpenAIService {
     });
   }
 
-  async classifyRules() {
-    return await this.calendarClassifierService.classifyEvent(
-      categorizeMockup.eventSummary,
-    );
+  async classifyRules(summaries: string[]) {
+    return await this.calendarClassifierService.classifyEvent(summaries);
   }
 
   async generateCategoryRules(): Promise<IGenerateCalendarResponse> {

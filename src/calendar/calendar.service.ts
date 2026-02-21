@@ -5,6 +5,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
 import { CalendarEvent } from './interfaces';
+import { categorizeMockup } from './mocks';
 
 @Injectable()
 export class CalendarService {
@@ -30,7 +31,7 @@ export class CalendarService {
   }
 
   classifyRules() {
-    return this.openAIService.classifyRules();
+    return this.openAIService.classifyRules(categorizeMockup.eventSummary);
   }
 
   generateCalendarRule() {
@@ -51,7 +52,7 @@ export class CalendarService {
           .sort((a, b) => b.keyword.length - a.keyword.length);
 
         if (matchedRule.length > 0) {
-          acc.rule.push({
+          acc.classified.push({
             ...matchedRule[0],
             matchedRule: matchedRule.map(({ keyword, category }) => ({
               keyword,
@@ -63,7 +64,7 @@ export class CalendarService {
 
         // In case of no matched rule => let LLM to categorize
         else
-          acc.ai.push({
+          acc.unClassify.push({
             summary: event,
             keyword: '',
             category: EEventCategory.UNKNOWN,
@@ -73,17 +74,33 @@ export class CalendarService {
         return acc;
       },
       {
-        rule: [],
-        ai: [],
+        classified: [],
+        unClassify: [],
       },
     );
+
+    const classifyAIEvent =
+      categorizedEvent.unClassify.length > 0
+        ? await this.openAIService.classifyRules(
+            categorizedEvent.unClassify.map(({ summary }) => summary),
+          )
+        : { results: [], count: 0 };
+
+    const classifyAIEventFormat = {
+      ...classifyAIEvent,
+      results: classifyAIEvent.results.map((result, index) => ({
+        ...result,
+        summary: categorizedEvent.unClassify[index].summary,
+      })),
+    };
 
     return {
       ...categorizedEvent,
       count: {
-        rule: categorizedEvent.rule.length,
-        ai: categorizedEvent.ai.length,
+        classified: categorizedEvent.classified.length,
+        unClassify: categorizedEvent.unClassify.length,
       },
+      classifyAIEvent: classifyAIEventFormat,
     };
   }
 
@@ -99,8 +116,8 @@ export class CalendarService {
 }
 
 interface ICategoryRules {
-  rule: Array<IRuleBase & { id: string; matchedRule: unknown[] }>;
-  ai: Array<IRuleBase & { tags: string[] }>;
+  classified: Array<IRuleBase & { id: string; matchedRule: unknown[] }>;
+  unClassify: Array<IRuleBase & { tags: string[] }>;
 }
 
 interface IRuleBase {
