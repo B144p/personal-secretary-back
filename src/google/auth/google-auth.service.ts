@@ -3,7 +3,6 @@ import { JwtService } from '@nestjs/jwt';
 import { User } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { IJwtSignData } from 'src/utils';
-import { getGoogleAuthRedirectUri } from '../google.constants';
 import { CreateOAuthClient, getGoogleProfile } from './google-auth.client';
 import { IGoogleValidateUser } from './strategies/google.strategy';
 
@@ -50,8 +49,26 @@ export class GoogleAuthService {
     return this.jwtService.sign(jwtSignData);
   }
 
+  // TODO: Remove on production
+  // ================== Flow for manual handling (without passport) (START) ==================
+  manualGenerateAuthUrl() {
+    const client = CreateOAuthClient();
+    return client.generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
+      scope: ['https://www.googleapis.com/auth/calendar', 'profile', 'email'],
+    });
+  }
+
+  async manualExchangeCode(code: string): Promise<unknown> {
+    const client = CreateOAuthClient();
+    const { tokens } = await client.getToken(code);
+
+    return { tokens };
+  }
+
   async userDelete(refresh_token: string): Promise<unknown> {
-    const client = CreateOAuthClient(getGoogleAuthRedirectUri());
+    const client = CreateOAuthClient();
     client.setCredentials({ refresh_token });
     const profile = await getGoogleProfile(client);
 
@@ -63,4 +80,6 @@ export class GoogleAuthService {
     });
     return 'User already deleted';
   }
+
+  // ================== Flow for manual handling (without passport) (END) ==================
 }

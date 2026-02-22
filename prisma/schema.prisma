@@ -15,8 +15,8 @@ model User {
   name          String?
   avartarUrl    String?
   refresh_token String
-  createAt      DateTime @default(now())
-  updateAt      DateTime @updatedAt
+  create_at     DateTime @default(now())
+  update_at     DateTime @updatedAt
 
   @@map("user")
 }
@@ -42,7 +42,51 @@ model Task {
 
   plan Plan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
 
-  // parent_id String
-
   @@map("task")
+}
+
+model CategoryRule {
+  id       String         @id @default(uuid())
+  keyword  String         @unique
+  category EEventCategory @default(UNKNOWN)
+
+  create_at   DateTime                 @default(now())
+  update_at   DateTime                 @updatedAt
+  keywordTags CategoryRuleKeywordTag[]
+
+  @@map("category_rule")
+}
+
+model CategoryRuleTag {
+  id  String @id @default(uuid())
+  tag String @unique
+
+  create_at   DateTime                 @default(now())
+  update_at   DateTime                 @updatedAt
+  keywordTags CategoryRuleKeywordTag[]
+
+  @@map("category_rule_tag")
+}
+
+model CategoryRuleKeywordTag {
+  tagId          String
+  categoryRuleId String
+
+  create_at DateTime @default(now())
+  update_at DateTime @updatedAt
+
+  categoryRule CategoryRule    @relation(fields: [categoryRuleId], references: [id], onDelete: Cascade)
+  tag          CategoryRuleTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([categoryRuleId, tagId])
+  @@map("category_rule_keyword_tag")
+}
+
+enum EEventCategory {
+  DEEP_WORK
+  MEETING
+  CHORE
+  HEALTH
+  PERSONAL
+  UNKNOWN
 }

@@ -1,54 +1,32 @@
 import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
-import { ChatCompletion, ChatModel } from 'openai/resources';
-import { promptConfig } from './constants';
-import { generatePlanResponseSchema } from './schemas';
-import { IGeneratePlanResponse } from './interfaces';
-
-const CHAT_MODEL: ChatModel = 'gpt-5-nano';
+import { CalendarClassifierService } from './calendar.classifier';
+import {
+  CalendarGeneratorService,
+  IGenerateCalendarResponse,
+} from './calendar.generate';
+import { generateTask } from './task.generate';
 
 @Injectable()
 export class OpenAIService {
-  constructor(private readonly openai: OpenAI) {}
+  constructor(
+    private readonly openai: OpenAI,
+    private readonly calendarClassifierService: CalendarClassifierService,
+    private readonly calendarGenerator: CalendarGeneratorService,
+  ) {}
 
   async generatePlan(prompt: string) {
-    const res: ChatCompletion = await this.openai.chat.completions.create({
-      model: CHAT_MODEL,
-      messages: [
-        ...(promptConfig.generatePlan.messages ?? []),
-        {
-          role: 'user',
-          content: `Generate task plan for: ${prompt}`,
-        },
-      ],
-      response_format: promptConfig.generatePlan.response_format,
+    return await generateTask({
+      client: this.openai,
+      prompt,
     });
-
-    const {
-      choices: [
-        {
-          message: { content },
-        },
-      ],
-    } = res;
-
-    if (typeof content !== 'string') {
-      throw new Error('OpenAI response content is null or not a string');
-    }
-
-    return JSON.parse(content) as IGeneratePlanResponse;
-
-    // const validatedRes = this.validateGeneratePlanResponse(JSON.parse(content));
-    // return validatedRes;
   }
 
-  validateGeneratePlanResponse(rawResponse: unknown) {
-    const parsed = generatePlanResponseSchema.safeParse(rawResponse);
-    if (!parsed.success) {
-      throw new Error(
-        `Wrong format response from OpenAI: ${JSON.stringify(parsed.error.issues)}`,
-      );
-    }
-    return parsed.data;
+  async classifyRules(summaries: string[]) {
+    return await this.calendarClassifierService.classifyEvent(summaries);
+  }
+
+  async generateCategoryRules(): Promise<IGenerateCalendarResponse> {
+    return await this.calendarGenerator.categoryRuleGenerator();
   }
 }

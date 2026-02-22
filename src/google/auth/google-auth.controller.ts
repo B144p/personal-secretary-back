@@ -36,8 +36,22 @@ export class GoogleAuthController {
     return res.redirect(`${GOOGLE_LOGIN_SUCCESS_URL}?token=${jwt}`);
   }
 
+  // TODO: Remove on production
+  // ================== Flow for manual handling (without passport) (START) ==================
+  // @Get()
+  // manualGenerateAuthUrl(@Res() res: Response) {
+  //   return res.redirect(this.googleAuthService.manualGenerateAuthUrl());
+  // }
+
+  // @Get(GOOGLE_AUTH_CALLBACK_PATH)
+  // async authCallback(@Query('code') code: string) {
+  //   return await this.googleAuthService.manualExchangeCode(code);
+  // }
+
   @Post('delete')
   deleteUser(@Body() body: { refresh_token: string }) {
     return this.googleAuthService.userDelete(body.refresh_token);
   }
+
+  // ================== Flow for manual handling (without passport) (END) ==================
 }

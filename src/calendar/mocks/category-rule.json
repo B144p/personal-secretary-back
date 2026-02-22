@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "keyword": "Lunch",
+      "category": "health",
+      "tags": ["food"]
+    },
+    {
+      "keyword": "Lunch meeting",
+      "category": "meeting",
+      "tags": ["food", "work", "urgent"]
+    },
+    {
+      "keyword": "Coding",
+      "category": "deep_work",
+      "tags": ["focus", "project"]
+    },
+    {
+      "keyword": "Cleaning",
+      "category": "chore",
+      "tags": ["cleaning", "shopping"]
+    },
+    {
+      "keyword": "Doctor",
+      "category": "health",
+      "tags": ["doctor"]
+    },
+    {
+      "keyword": "gym",
+      "category": "health",
+      "tags": ["exercise"]
+    },
+    {
+      "keyword": "Birthday party",
+      "category": "personal",
+      "tags": ["family", "friends", "party"]
+    }
+  ]
+}
