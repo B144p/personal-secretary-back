@@ -130,17 +130,17 @@ const upsertCategoryRule = async ({
       create: {
         keyword,
         category,
-        keywordTags: {
+        keyword_tags: {
           createMany: {
-            data: tagIdRecords.map(({ id }) => ({ tagId: id })),
+            data: tagIdRecords.map(({ id }) => ({ tag_id: id })),
             skipDuplicates: true,
           },
         },
       },
       update: {
-        keywordTags: {
+        keyword_tags: {
           createMany: {
-            data: tagIdRecords.map(({ id }) => ({ tagId: id })),
+            data: tagIdRecords.map(({ id }) => ({ tag_id: id })),
             skipDuplicates: true,
           },
         },

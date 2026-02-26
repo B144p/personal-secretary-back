@@ -25,14 +25,14 @@ export class GoogleAuthService {
       update: {
         name,
         email,
-        avartarUrl: profileUrl,
+        avartar_url: profileUrl,
         refresh_token: refreshToken || undefined,
       },
       create: {
         google_id: googleId,
         name,
         email,
-        avartarUrl: profileUrl,
+        avartar_url: profileUrl,
         refresh_token: refreshToken || '',
       },
     });

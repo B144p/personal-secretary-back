@@ -119,9 +119,9 @@ export class CalendarService {
     });
 
     await this.prisma.userState.upsert({
-      where: { userId: user.id },
+      where: { user_id: user.id },
       create: {
-        userId: user.id,
+        user_id: user.id,
         last_calendar_sync: dayjs().toISOString(),
       },
       update: {
