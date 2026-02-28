@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EEventCategory } from '@prisma/client';
+import dayjs from 'dayjs';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -104,14 +105,41 @@ export class CalendarService {
     };
   }
 
-  async getCalendarList(id: string): Promise<unknown> {
-    const user = await this.userService.getProfile(id);
+  async getCalendarList(userId: string) {
+    const user = await this.userService.getProfile(userId);
     const calendarClient = getCalendarClient(user.refresh_token);
-    const calendarList = calendarClient.events.list({
+
+    const updatedMin = user.user_state?.last_calendar_sync
+      ? dayjs(user.user_state.last_calendar_sync).toISOString()
+      : undefined; // If never sync before, get all calendar events
+
+    const calendarList = await calendarClient.events.list({
       calendarId: 'primary',
+      updatedMin,
     });
 
-    return calendarList;
+    await this.prisma.userState.upsert({
+      where: { user_id: user.id },
+      create: {
+        user_id: user.id,
+        last_calendar_sync: dayjs().toISOString(),
+      },
+      update: {
+        last_calendar_sync: dayjs().toISOString(),
+      },
+    });
+
+    const dataFormat =
+      calendarList.data.items?.map(
+        ({ kind, etag, created, updated, ...rest }) => {
+          return rest;
+        },
+      ) ?? [];
+
+    return {
+      results: dataFormat,
+      count: dataFormat.length,
+    };
   }
 }
 

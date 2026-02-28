@@ -1,15 +1,20 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { categorizeMockup } from 'src/calendar/mocks';
 import { OpenAIService } from 'src/openai/openai.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { GenerateTaskDto } from './dto/create-task.dto';
 import { mapToGoogleCalendar } from './utils';
 
 @Injectable()
 export class TaskService {
+  private readonly logger = new Logger(TaskService.name);
+
   constructor(
     private readonly openAIService: OpenAIService,
     private readonly calendarService: CalendarService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async generate(generateTaskDto: GenerateTaskDto) {
@@ -39,8 +44,19 @@ export class TaskService {
     return generatePlanResponse;
   }
 
-  getCalendarList(id: string) {
-    return this.calendarService.getCalendarList(id);
+  @Interval(1000 * 60)
+  async syncUserCalendar() {
+    const users = await this.prisma.user.findMany();
+    for (const user of users) {
+      const calendarList = await this.calendarService.getCalendarList(user.id);
+      this.logger.log(
+        `user_id: ${user.id}, name: ${user.name} | Update Sync: ${calendarList.count}`,
+      );
+    }
+  }
+
+  getCalendarList(userId: string) {
+    return this.calendarService.getCalendarList(userId);
   }
 
   categorizeCalendarEvent() {

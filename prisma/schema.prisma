@@ -13,12 +13,25 @@ model User {
   google_id     String   @unique
   email         String   @unique
   name          String?
-  avartarUrl    String?
+  avartar_url   String?
   refresh_token String
   create_at     DateTime @default(now())
   update_at     DateTime @updatedAt
 
+  user_state UserState?
+
   @@map("user")
+}
+
+model UserState {
+  id      String @id @default(cuid())
+  user_id String @unique
+
+  last_calendar_sync DateTime?
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@map("user_state")
 }
 
 model Plan {
@@ -50,9 +63,9 @@ model CategoryRule {
   keyword  String         @unique
   category EEventCategory @default(UNKNOWN)
 
-  create_at   DateTime                 @default(now())
-  update_at   DateTime                 @updatedAt
-  keywordTags CategoryRuleKeywordTag[]
+  create_at    DateTime                 @default(now())
+  update_at    DateTime                 @updatedAt
+  keyword_tags CategoryRuleKeywordTag[]
 
   @@map("category_rule")
 }
@@ -61,24 +74,24 @@ model CategoryRuleTag {
   id  String @id @default(uuid())
   tag String @unique
 
-  create_at   DateTime                 @default(now())
-  update_at   DateTime                 @updatedAt
-  keywordTags CategoryRuleKeywordTag[]
+  create_at    DateTime                 @default(now())
+  update_at    DateTime                 @updatedAt
+  keyword_tags CategoryRuleKeywordTag[]
 
   @@map("category_rule_tag")
 }
 
 model CategoryRuleKeywordTag {
-  tagId          String
-  categoryRuleId String
+  tag_id           String
+  category_rule_id String
 
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
 
-  categoryRule CategoryRule    @relation(fields: [categoryRuleId], references: [id], onDelete: Cascade)
-  tag          CategoryRuleTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  category_rule CategoryRule    @relation(fields: [category_rule_id], references: [id], onDelete: Cascade)
+  tag           CategoryRuleTag @relation(fields: [tag_id], references: [id], onDelete: Cascade)
 
-  @@id([categoryRuleId, tagId])
+  @@id([category_rule_id, tag_id])
   @@map("category_rule_keyword_tag")
 }
 
