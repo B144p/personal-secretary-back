@@ -41,6 +41,7 @@ model Plan {
   title       String
   source_id   String?
   source_type EPlanSourceType?
+  status      EPlanStatus
 
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
@@ -114,6 +115,13 @@ enum EEventCategory {
 enum EPlanSourceType {
   GENERATE
   CALENDAR
+}
+
+enum EPlanStatus {
+  DRAFT
+  READY
+  SCHEDULED
+  HOLD
 }
 
 enum ETaskStatus {
