@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
+import { GeneratePlanDto } from 'src/plan/dto/generate-plan.dto';
 import { CalendarClassifierService } from './calendar.classifier';
 import {
   CalendarGeneratorService,
@@ -15,7 +16,7 @@ export class OpenAIService {
     private readonly calendarGenerator: CalendarGeneratorService,
   ) {}
 
-  async generatePlan(prompt: string) {
+  async generatePlan(prompt: GeneratePlanDto) {
     return await generateTask({
       client: this.openai,
       prompt,

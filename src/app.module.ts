@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { GoogleModule } from './google/google.module';
 import { OpenaiModule } from './openai/openai.module';
+import { PlanModule } from './plan/plan.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TaskModule } from './task/task.module';
 import { UserModule } from './user/user.module';
@@ -20,6 +21,7 @@ import { UserModule } from './user/user.module';
     OpenaiModule,
     GoogleModule,
     UserModule,
+    PlanModule,
   ],
   controllers: [AppController],
   providers: [AppService],
