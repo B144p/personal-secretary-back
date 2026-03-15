@@ -1,17 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { OpenAIService } from 'src/openai/openai.service';
-import { GeneratePlanDto } from './dto/generate-plan.dto';
 import { ReGeneratePlanDto } from './dto/re-generate-plan.dto';
 
 @Injectable()
 export class PlanService {
   constructor(private readonly openAIService: OpenAIService) {}
 
-  async generate(generatePlanDto: GeneratePlanDto) {
-    const generatePlanResponse =
-      await this.openAIService.generatePlan(generatePlanDto);
-
-    return generatePlanResponse;
+  async generate(data: Parameters<typeof this.openAIService.generatePlan>[0]) {
+    return await this.openAIService.generatePlan(data);
   }
 
   reGenerate(reGeneratePlanDto: ReGeneratePlanDto) {
@@ -21,11 +17,11 @@ export class PlanService {
     };
   }
 
-  planAction(id: number, action: 'approve' | 'pause' | 'schedule') {
+  planAction(id: string, action: 'approve' | 'pause' | 'schedule') {
     return `Trigger ${action} on #${id} plan`;
   }
 
-  remove(id: number) {
+  remove(id: string) {
     return `This action removes a #${id} plan`;
   }
 }

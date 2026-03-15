@@ -1,26 +1,23 @@
 import { Injectable } from '@nestjs/common';
-import OpenAI from 'openai';
-import { GeneratePlanDto } from 'src/plan/dto/generate-plan.dto';
 import { CalendarClassifierService } from './calendar.classifier';
 import {
   CalendarGeneratorService,
   IGenerateCalendarResponse,
 } from './calendar.generate';
-import { generateTask } from './task.generate';
+import { TaskGeneratorService } from './task.generate';
 
 @Injectable()
 export class OpenAIService {
   constructor(
-    private readonly openai: OpenAI,
     private readonly calendarClassifierService: CalendarClassifierService,
     private readonly calendarGenerator: CalendarGeneratorService,
+    private readonly taskGeneratorService: TaskGeneratorService,
   ) {}
 
-  async generatePlan(prompt: GeneratePlanDto) {
-    return await generateTask({
-      client: this.openai,
-      prompt,
-    });
+  async generatePlan(
+    data: Parameters<typeof this.taskGeneratorService.generatePlan>[0],
+  ) {
+    return await this.taskGeneratorService.generatePlan(data);
   }
 
   async classifyRules(summaries: string[]) {
