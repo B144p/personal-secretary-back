@@ -37,7 +37,7 @@ model UserState {
 
 model Plan {
   id          String           @id @default(uuid())
-  user_id     String           @unique
+  user_id     String
   title       String
   source_id   String?
   source_type EPlanSourceType?
