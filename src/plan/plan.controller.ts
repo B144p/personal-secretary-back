@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   Param,
   Patch,
   Post,
@@ -32,16 +33,39 @@ export class PlanController {
     });
   }
 
+  @Get()
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  async getList(@Req() req: Request) {
+    return await this.planService.getList({
+      userId: validateJwtPayload(req.user).sub,
+    });
+  }
+
+  @Get(':id')
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  async getDetail(@Req() req: Request, @Param('id') id: string) {
+    return await this.planService.getDetail({
+      userId: validateJwtPayload(req.user).sub,
+      id,
+    });
+  }
+
   @Post('re_generate')
   reGenerate(@Body() reGeneratePlanDto: ReGeneratePlanDto) {
     return this.planService.reGenerate(reGeneratePlanDto);
+  }
+
+  @Patch(':id/schedule')
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  planSchedule(@Param('id') id: string) {
+    return `Schedule plan on #${id}`;
   }
 
   @Patch(':id/:action')
   @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   planAction(
     @Param('id') id: string,
-    @Param('action') action: 'approve' | 'pause' | 'schedule',
+    @Param('action') action: 'approve' | 'pause',
   ) {
     return this.planService.planAction(id, action);
   }
