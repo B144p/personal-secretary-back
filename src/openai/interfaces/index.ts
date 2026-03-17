@@ -1,3 +1,12 @@
+export {
+  IGeneratePlanProps,
+  IGenerateTaskProps,
+  IGetPlanProps,
+  IReGeneratePlanProps,
+  IReGenerateTaskProps,
+  IUpsertPlanProps,
+} from './task.generate';
+
 export interface IGeneratePlanResponse {
   goal: string;
   duration_days: number;

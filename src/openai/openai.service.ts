@@ -20,6 +20,12 @@ export class OpenAIService {
     return await this.taskGeneratorService.generatePlan(data);
   }
 
+  async reGeneratePlan(
+    data: Parameters<typeof this.taskGeneratorService.reGeneratePlan>[0],
+  ) {
+    return await this.taskGeneratorService.reGeneratePlan(data);
+  }
+
   async classifyRules(summaries: string[]) {
     return await this.calendarClassifierService.classifyEvent(summaries);
   }

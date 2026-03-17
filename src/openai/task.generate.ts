@@ -2,19 +2,21 @@ import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
-import { GeneratePlanDto } from 'src/plan/dto/generate-plan.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { z } from 'zod';
-import { generatePlanPrompt } from './prompt';
-import { generatePlanResponseSchema, IGeneratePlanResponse } from './schemas';
+import {
+  IGeneratePlanProps,
+  IGenerateTaskProps,
+  IGetPlanProps,
+  IReGeneratePlanProps,
+  IReGenerateTaskProps,
+  IUpsertPlanProps,
+} from './interfaces';
+import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
+import { generatePlanResponseSchema } from './schemas';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
-
-interface IGeneratePlanProps {
-  userId: string;
-  prompt: GeneratePlanDto;
-}
 
 @Injectable()
 export class TaskGeneratorService {
@@ -30,10 +32,41 @@ export class TaskGeneratorService {
       prompt,
     });
     const user = await this.userService.getProfile(userId);
-    const createdPlan = await createPlan({
+    const createdPlan = await upsertPlan({
       user,
       client: this.prisma,
       plan: generatedPlan.output,
+    });
+
+    return createdPlan;
+  }
+
+  async reGeneratePlan({ userId, data }: IReGeneratePlanProps) {
+    const earlierTasks = await getPlan({
+      client: this.prisma,
+      id: data.id,
+      userId,
+    });
+    if (!earlierTasks) return 'Something went wrong';
+
+    const formatedEarlierTasks = {
+      title: earlierTasks.title,
+      tasks: earlierTasks.tasks.map(({ title }) => title),
+    };
+
+    const reGeneratedPlan = await reGenerateTask({
+      client: this.openai,
+      data: {
+        feedback: data.feedback,
+        earlierTask: formatedEarlierTasks,
+      },
+    });
+    const user = await this.userService.getProfile(userId);
+    const createdPlan = await upsertPlan({
+      user,
+      client: this.prisma,
+      plan: reGeneratedPlan.output,
+      planId: data.id,
     });
 
     return createdPlan;
@@ -89,6 +122,51 @@ const generateTask = async ({
   };
 };
 
+const reGenerateTask = async ({
+  client,
+  data: { feedback, earlierTask },
+}: IReGenerateTaskProps) => {
+  const llmRes = await client.responses.parse({
+    model: CHAT_MODEL,
+    input: [
+      {
+        role: 'system',
+        content: [
+          { type: 'input_text', text: reGeneratePlanPrompt.instruction },
+          { type: 'input_text', text: reGeneratePlanPrompt.rules },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Existing Tasks: ${JSON.stringify(earlierTask)}`,
+          },
+          {
+            type: 'input_text',
+            text: `User Feedback: ${feedback ?? 'Nothing'}`,
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'plan',
+        strict: true,
+        schema: z.toJSONSchema(generatePlanResponseSchema),
+      },
+    },
+  });
+  const outputParsed = validateGeneratePlanResponse(llmRes.output_parsed);
+
+  return {
+    usage: llmRes.usage,
+    output: outputParsed,
+  };
+};
+
 const validateGeneratePlanResponse = (rawResponse: unknown) => {
   if (!rawResponse) {
     throw new Error('Response from OpenAI is null');
@@ -103,7 +181,75 @@ const validateGeneratePlanResponse = (rawResponse: unknown) => {
   return parsed.data;
 };
 
-const createPlan = async ({ user, client, plan }: ICreatedPlanProps) => {
+const getPlan = async ({ client, id, userId }: IGetPlanProps) => {
+  return await client.plan.findUnique({
+    where: {
+      id,
+      user_id: userId,
+    },
+    include: {
+      tasks: {
+        select: {
+          title: true,
+        },
+      },
+    },
+  });
+};
+
+const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
+  if (planId) return await updatePlan({ user, client, plan, planId });
+  return await createPlan({ user, client, plan });
+};
+
+const updatePlan = async ({
+  user,
+  client,
+  plan,
+  planId,
+}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
+  const { tasks, ...restCreatedPlan } = await client.plan.update({
+    where: {
+      id: planId,
+      user_id: user.id,
+    },
+    data: {
+      title: plan.goal,
+      tasks: {
+        deleteMany: {
+          plan_id: planId,
+        },
+        createMany: {
+          data: plan.tasks.map((task) => ({
+            title: task,
+            status: ETaskStatus.PENDING,
+          })),
+        },
+      },
+    },
+    include: {
+      tasks: {
+        select: {
+          title: true,
+        },
+      },
+    },
+    omit: {
+      user_id: true,
+    },
+  });
+
+  return {
+    ...restCreatedPlan,
+    tasks: tasks.map(({ title }) => title),
+  };
+};
+
+const createPlan = async ({
+  user,
+  client,
+  plan,
+}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
   const { tasks, ...restCreatedPlan } = await client.plan.create({
     data: {
       user_id: user.id,
@@ -136,14 +282,3 @@ const createPlan = async ({ user, client, plan }: ICreatedPlanProps) => {
     tasks: tasks.map(({ title }) => title),
   };
 };
-
-interface IGenerateTaskProps {
-  client: OpenAI;
-  prompt: GeneratePlanDto;
-}
-
-interface ICreatedPlanProps {
-  user: Awaited<ReturnType<UserService['getProfile']>>;
-  client: PrismaService;
-  plan: IGeneratePlanResponse;
-}

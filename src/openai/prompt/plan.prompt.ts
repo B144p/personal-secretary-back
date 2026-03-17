@@ -1,9 +1,9 @@
-const instruction = `
+const generateInstruction = `
   You are an expert productivity planner.
   Your job is to convert a user's goal into a list of actionable tasks.
 `;
 
-const rules = `
+const generateRules = `
   Rules:
   - Break the goal into clear, executable tasks.
   - Each task should represent a single action that can realistically be completed in one focused session.
@@ -14,7 +14,7 @@ const rules = `
   Return structured JSON only.
 `;
 
-// const explainOutputSchema = `
+// const generateExplainOutputSchema = `
 //   Output JSON schema each event:
 //   {
 //     "goal": summarize what user want to do,
@@ -24,8 +24,28 @@ const rules = `
 //   }
 // `;
 
+const reGenerateInstruction = `
+  You are an expert productivity planner.
+  Your job is to improve an existing task plan.
+`;
+const reGenerateRules = `
+  Rules:
+  - Modify the plan based on the user's feedback.
+  - Remove tasks that are already completed.
+  - Add missing tasks if necessary.
+  - Keep tasks actionable and ordered.
+  - Preserve tasks that are still valid.
+`;
+
+// TODO: Improve prompt
 export const generatePlanPrompt = {
-  instruction,
-  rules,
+  instruction: generateInstruction,
+  rules: generateRules,
   // explainOutputSchema,
+};
+
+// TODO: Improve prompt
+export const reGeneratePlanPrompt = {
+  instruction: reGenerateInstruction,
+  rules: reGenerateRules,
 };

@@ -50,9 +50,20 @@ export class PlanController {
     });
   }
 
-  @Post('re_generate')
-  reGenerate(@Body() reGeneratePlanDto: ReGeneratePlanDto) {
-    return this.planService.reGenerate(reGeneratePlanDto);
+  @Post(':id/re_generate')
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  reGenerate(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() reGeneratePlanDto: ReGeneratePlanDto,
+  ) {
+    return this.planService.reGenerate({
+      userId: validateJwtPayload(req.user).sub,
+      data: {
+        ...reGeneratePlanDto,
+        id,
+      },
+    });
   }
 
   @Patch(':id/schedule')

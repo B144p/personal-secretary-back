@@ -1,3 +1,7 @@
+import { IsOptional, IsString } from 'class-validator';
+
 export class ReGeneratePlanDto {
-  feedback: string;
+  @IsString()
+  @IsOptional()
+  feedback?: string;
 }

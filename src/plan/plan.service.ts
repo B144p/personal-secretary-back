@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
-import { ReGeneratePlanDto } from './dto/re-generate-plan.dto';
 
 @Injectable()
 export class PlanService {
@@ -68,11 +67,10 @@ export class PlanService {
     };
   }
 
-  reGenerate(reGeneratePlanDto: ReGeneratePlanDto) {
-    return {
-      message: 're-generate plan',
-      ...reGeneratePlanDto,
-    };
+  async reGenerate(
+    data: Parameters<typeof this.openAIService.reGeneratePlan>[0],
+  ) {
+    return await this.openAIService.reGeneratePlan(data);
   }
 
   planAction(id: string, action: 'approve' | 'pause' | 'schedule') {
