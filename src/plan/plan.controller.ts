@@ -88,7 +88,11 @@ export class PlanController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.planService.remove(id);
+  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+  remove(@Req() req: Request, @Param('id') id: string) {
+    return this.planService.remove({
+      id,
+      userId: validateJwtPayload(req.user).sub,
+    });
   }
 }

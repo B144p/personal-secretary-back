@@ -13,3 +13,7 @@ export interface IPlanActionProps extends IUserReq {
   id: string;
   mode: IPlanActionMode;
 }
+
+export type IRemovePlanProps = IUserReq & {
+  id: string;
+};

@@ -3,7 +3,12 @@ import { EPlanStatus } from '@prisma/client';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
-import { IGetDetailProps, IGetListProps, IPlanActionProps } from './interfaces';
+import {
+  IGetDetailProps,
+  IGetListProps,
+  IPlanActionProps,
+  IRemovePlanProps,
+} from './interfaces';
 
 @Injectable()
 export class PlanService {
@@ -130,7 +135,19 @@ export class PlanService {
     }
   }
 
-  remove(id: string) {
-    return `This action removes a #${id} plan`;
+  async remove({ id, userId }: IRemovePlanProps) {
+    const plan = await this.getDetail({
+      id,
+      userId,
+    });
+    if (typeof plan === 'string') return plan;
+
+    await this.prisma.plan.delete({
+      where: {
+        id,
+        user_id: userId,
+      },
+    });
+    return `Remove plan success.`;
   }
 }
