@@ -47,7 +47,7 @@ export class TaskGeneratorService {
       id: data.id,
       userId,
     });
-    if (!earlierTasks) return 'Something went wrong';
+    if (!earlierTasks) return 'Plan is not found!';
 
     const formatedEarlierTasks = {
       title: earlierTasks.title,

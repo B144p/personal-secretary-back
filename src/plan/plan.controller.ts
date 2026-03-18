@@ -15,6 +15,7 @@ import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { GeneratePlanDto } from './dto/generate-plan.dto';
 import { ReGeneratePlanDto } from './dto/re-generate-plan.dto';
+import { IPlanActionMode } from './interfaces';
 import { PlanService } from './plan.service';
 
 @Controller('plan')
@@ -72,13 +73,18 @@ export class PlanController {
     return `Schedule plan on #${id}`;
   }
 
-  @Patch(':id/:action')
+  @Patch(':id/:mode')
   @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   planAction(
+    @Req() req: Request,
     @Param('id') id: string,
-    @Param('action') action: 'approve' | 'pause',
+    @Param('mode') mode: IPlanActionMode,
   ) {
-    return this.planService.planAction(id, action);
+    return this.planService.planAction({
+      id,
+      mode,
+      userId: validateJwtPayload(req.user).sub,
+    });
   }
 
   @Delete(':id')

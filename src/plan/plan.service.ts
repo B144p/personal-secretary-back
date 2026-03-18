@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { EPlanStatus } from '@prisma/client';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
+import { IGetDetailProps, IGetListProps, IPlanActionProps } from './interfaces';
 
 @Injectable()
 export class PlanService {
@@ -44,7 +46,7 @@ export class PlanService {
 
   async getDetail({ userId, id }: IGetDetailProps) {
     const user = await this.userService.getProfile(userId);
-    const { tasks, ...restPlan } = await this.prisma.plan.findUniqueOrThrow({
+    const plan = await this.prisma.plan.findUnique({
       where: {
         user_id: user.id,
         id,
@@ -60,6 +62,9 @@ export class PlanService {
         user_id: true,
       },
     });
+    if (!plan) return 'Plan is not found!';
+
+    const { tasks, ...restPlan } = plan;
 
     return {
       ...restPlan,
@@ -73,21 +78,59 @@ export class PlanService {
     return await this.openAIService.reGeneratePlan(data);
   }
 
-  planAction(id: string, action: 'approve' | 'pause' | 'schedule') {
-    return `Trigger ${action} on #${id} plan`;
+  // TODO: Refactor for reduce complexity
+  async planAction({ userId, id, mode }: IPlanActionProps) {
+    const plan = await this.getDetail({
+      id,
+      userId,
+    });
+    if (typeof plan === 'string') return plan;
+
+    const updatePlanStatus = async (id: string, status: EPlanStatus) => {
+      await this.prisma.plan.update({
+        where: { id },
+        data: { status },
+      });
+      return `Trigger ${mode} on #${id} plan success.`;
+    };
+
+    const approveAction = async () => {
+      switch (plan.status) {
+        case EPlanStatus.DRAFT:
+          return await updatePlanStatus(id, EPlanStatus.READY);
+        case EPlanStatus.HOLD:
+        case EPlanStatus.READY:
+        case EPlanStatus.SCHEDULED:
+          return 'Your plan is already approved.';
+        default:
+          throw new Error('Status is out of scope.');
+      }
+    };
+
+    const pauseAction = async () => {
+      switch (plan.status) {
+        case EPlanStatus.DRAFT:
+          return 'Your plan still in phase draft.';
+        case EPlanStatus.HOLD:
+        case EPlanStatus.READY:
+        case EPlanStatus.SCHEDULED:
+          return await updatePlanStatus(id, EPlanStatus.HOLD);
+        default:
+          throw new Error('Status is out of scope.');
+      }
+    };
+
+    switch (mode) {
+      case 'pause':
+        return await pauseAction();
+      case 'approve':
+        return await approveAction();
+      default:
+        return 'Action mode out of scope!';
+    }
   }
 
   remove(id: string) {
     return `This action removes a #${id} plan`;
   }
-}
-
-interface IUserReq {
-  userId: string;
-}
-
-type IGetListProps = IUserReq & {};
-
-interface IGetDetailProps extends IUserReq {
-  id: string;
 }
