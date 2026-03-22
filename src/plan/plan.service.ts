@@ -83,6 +83,12 @@ export class PlanService {
     return await this.openAIService.reGeneratePlan(data);
   }
 
+  async generateAndApplyTaskSchedule(
+    data: Parameters<typeof this.openAIService.generateAndApplyTaskSchedule>[0],
+  ) {
+    return await this.openAIService.generateAndApplyTaskSchedule(data);
+  }
+
   // TODO: Refactor for reduce complexity
   async planAction({ userId, id, mode }: IPlanActionProps) {
     const plan = await this.getDetail({

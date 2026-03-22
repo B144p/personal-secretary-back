@@ -5,7 +5,7 @@ import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
-import { CalendarEvent } from './interfaces';
+import { CalendarEvent, IGetCalendarRangeProps } from './interfaces';
 import { categorizeMockup } from './mocks';
 
 @Injectable()
@@ -141,6 +141,39 @@ export class CalendarService {
       count: dataFormat.length,
     };
   }
+
+  async getCalendarRange({
+    userId,
+    calendarId = 'primary',
+    range,
+  }: IGetCalendarRangeProps) {
+    const user = await this.userService.getProfile(userId);
+    const calendarClient = getCalendarClient(user.refresh_token);
+
+    const calendarList = await calendarClient.events.list({
+      calendarId,
+      ...range,
+    });
+
+    const dataFormat =
+      calendarList.data.items?.map(({ extendedProperties, ...rest }) => {
+        const parsedExtendedProperties = {
+          ...extendedProperties,
+          private: (extendedProperties?.private ??
+            {}) as IEventPrivateProperties,
+        };
+        return {
+          ...rest,
+          extendedProperties: parsedExtendedProperties,
+        };
+      }) ?? [];
+
+    return {
+      range,
+      results: dataFormat,
+      count: dataFormat.length,
+    };
+  }
 }
 
 interface ICategoryRules {
@@ -152,4 +185,9 @@ interface IRuleBase {
   keyword: string;
   category: EEventCategory;
   summary: string;
+}
+
+interface IEventPrivateProperties {
+  plan_id?: string;
+  task_id?: string;
 }
