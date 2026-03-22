@@ -15,6 +15,7 @@ import {
 } from './interfaces';
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
 import { generatePlanResponseSchema } from './schemas';
+import { validateOpenAIResponse } from './utils';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
@@ -114,7 +115,11 @@ const generateTask = async ({
       },
     },
   });
-  const outputParsed = validateGeneratePlanResponse(llmRes.output_parsed);
+
+  const outputParsed = validateOpenAIResponse(
+    generatePlanResponseSchema,
+    llmRes.output_parsed,
+  );
 
   return {
     usage: llmRes.usage,
@@ -159,26 +164,16 @@ const reGenerateTask = async ({
       },
     },
   });
-  const outputParsed = validateGeneratePlanResponse(llmRes.output_parsed);
+
+  const outputParsed = validateOpenAIResponse(
+    generatePlanResponseSchema,
+    llmRes.output_parsed,
+  );
 
   return {
     usage: llmRes.usage,
     output: outputParsed,
   };
-};
-
-const validateGeneratePlanResponse = (rawResponse: unknown) => {
-  if (!rawResponse) {
-    throw new Error('Response from OpenAI is null');
-  }
-
-  const parsed = generatePlanResponseSchema.safeParse(rawResponse);
-  if (!parsed.success) {
-    throw new Error(
-      `Wrong format response from OpenAI: ${JSON.stringify(parsed.error.issues)}`,
-    );
-  }
-  return parsed.data;
 };
 
 const getPlan = async ({ client, id, userId }: IGetPlanProps) => {
