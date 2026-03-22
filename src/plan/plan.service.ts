@@ -3,6 +3,7 @@ import { EPlanStatus } from '@prisma/client';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
+import { CalendarScheduleService } from './calendar.schedule';
 import {
   IGetDetailProps,
   IGetListProps,
@@ -16,6 +17,7 @@ export class PlanService {
     private readonly openAIService: OpenAIService,
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
+    private readonly calendarScheduleService: CalendarScheduleService,
   ) {}
 
   async generate(data: Parameters<typeof this.openAIService.generatePlan>[0]) {
@@ -84,9 +86,13 @@ export class PlanService {
   }
 
   async generateAndApplyTaskSchedule(
-    data: Parameters<typeof this.openAIService.generateAndApplyTaskSchedule>[0],
+    data: Parameters<
+      typeof this.calendarScheduleService.generateAndApplyTaskSchedule
+    >[0],
   ) {
-    return await this.openAIService.generateAndApplyTaskSchedule(data);
+    return await this.calendarScheduleService.generateAndApplyTaskSchedule(
+      data,
+    );
   }
 
   // TODO: Refactor for reduce complexity

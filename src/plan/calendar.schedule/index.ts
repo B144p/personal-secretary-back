@@ -1,4 +1,4 @@
-import { forwardRef, Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import dayjs from 'dayjs';
 import OpenAI from 'openai';
 import { CalendarService } from 'src/calendar/calendar.service';
@@ -6,9 +6,8 @@ import { CalendarService } from 'src/calendar/calendar.service';
 @Injectable()
 export class CalendarScheduleService {
   constructor(
-    @Inject(forwardRef(() => CalendarService))
-    private readonly calendarService: CalendarService,
     private readonly openai: OpenAI,
+    private readonly calendarService: CalendarService,
   ) {}
 
   async generateAndApplyTaskSchedule({ userId }: ITaskScheduleProps) {
@@ -64,8 +63,27 @@ type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & {
   client: CalendarService;
 };
 
-const generateTaskSchedule = async ({ calendar }: IGenerateTaskSchedule) => {
-  return new Promise((resolve) => resolve(calendar));
+const generateTaskSchedule = async ({ client }: IGenerateTaskSchedule) => {
+  const llmRes = await client.responses.create({
+    model: 'gpt-5-nano',
+    input: [
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'input_text',
+            text: 'This request just for check connection status',
+          },
+          {
+            type: 'input_text',
+            text: 'Return only status.',
+          },
+        ],
+      },
+    ],
+  });
+
+  return llmRes;
 };
 interface IGenerateTaskSchedule {
   client: OpenAI;

@@ -4,7 +4,6 @@ import {
   CalendarGeneratorService,
   IGenerateCalendarResponse,
 } from './calendar.generate';
-import { CalendarScheduleService } from './calendar.schedule';
 import { TaskGeneratorService } from './task.generate';
 
 // Problem found: import module to each other => need forwardRef
@@ -15,7 +14,6 @@ export class OpenAIService {
     private readonly calendarClassifierService: CalendarClassifierService,
     private readonly calendarGenerator: CalendarGeneratorService,
     private readonly taskGeneratorService: TaskGeneratorService,
-    private readonly calendarScheduleService: CalendarScheduleService,
   ) {}
 
   async generatePlan(
@@ -28,16 +26,6 @@ export class OpenAIService {
     data: Parameters<typeof this.taskGeneratorService.reGeneratePlan>[0],
   ) {
     return await this.taskGeneratorService.reGeneratePlan(data);
-  }
-
-  async generateAndApplyTaskSchedule(
-    data: Parameters<
-      typeof this.calendarScheduleService.generateAndApplyTaskSchedule
-    >[0],
-  ) {
-    return await this.calendarScheduleService.generateAndApplyTaskSchedule(
-      data,
-    );
   }
 
   async classifyRules(summaries: string[]) {

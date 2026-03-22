@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
+import OpenAI from 'openai';
+import { CalendarModule } from 'src/calendar/calendar.module';
 import { UserModule } from 'src/user/user.module';
+import { CalendarScheduleService } from './calendar.schedule';
 import { PlanController } from './plan.controller';
 import { PlanService } from './plan.service';
 
 @Module({
-  imports: [UserModule],
+  imports: [UserModule, CalendarModule],
   controllers: [PlanController],
-  providers: [PlanService],
+  providers: [PlanService, OpenAI, CalendarScheduleService],
 })
 export class PlanModule {}
