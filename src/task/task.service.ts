@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Interval } from '@nestjs/schedule';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { categorizeMockup } from 'src/calendar/mocks';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -13,7 +12,7 @@ export class TaskService {
     private readonly prisma: PrismaService,
   ) {}
 
-  @Interval(1000 * 60)
+  // @Interval(1000 * 60)
   async syncUserCalendar() {
     const users = await this.prisma.user.findMany();
     for (const user of users) {
