@@ -1,6 +1,7 @@
 const generateInstruction = `
   You are an expert productivity planner.
   Your job is to convert a user's goal into a list of actionable tasks.
+  You can break down task small as much as you want for easiest way to approach the goal.
 `;
 
 const generateRules = `

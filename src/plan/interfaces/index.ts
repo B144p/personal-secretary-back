@@ -17,3 +17,7 @@ export interface IPlanActionProps extends IUserReq {
 export type IRemovePlanProps = IUserReq & {
   id: string;
 };
+
+export interface ITaskScheduleProps extends IUserReq {
+  id: string;
+}
