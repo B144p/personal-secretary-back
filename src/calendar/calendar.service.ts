@@ -5,7 +5,7 @@ import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
-import { CalendarEvent, IGetCalendarRangeProps } from './interfaces';
+import { IGetCalendarRangeProps, IInsertEvent } from './interfaces';
 import { categorizeMockup } from './mocks';
 
 @Injectable()
@@ -16,19 +16,23 @@ export class CalendarService {
     private readonly openAIService: OpenAIService,
   ) {}
 
-  insertEvents(events: CalendarEvent[]) {
-    console.log('Insert event:', events);
-    // for (const ev of events) {
-    //   await this.calendar.events.insert({
-    //     calendarId: 'primary',
-    //     requestBody: {
-    //       summary: ev.title,
-    //       description: ev.description,
-    //       start: { dateTime: ev.start.toISOString(), timeZone: 'Asia/Bangkok' },
-    //       end: { dateTime: ev.end.toISOString(), timeZone: 'Asia/Bangkok' },
-    //     },
-    //   });
-    // }
+  async getClient(userId: string) {
+    const user = await this.userService.getProfile(userId);
+    return getCalendarClient(user.refresh_token);
+  }
+
+  async insertEvent({ userId, request }: IInsertEvent) {
+    const client = await this.getClient(userId);
+    const { params, options } = request;
+    const createdEvent = await client.events.insert(
+      {
+        ...params,
+        calendarId: params.calendarId ?? 'primary',
+      },
+      options,
+    );
+
+    return createdEvent.data;
   }
 
   classifyRules() {
@@ -107,13 +111,13 @@ export class CalendarService {
 
   async getCalendarList(userId: string) {
     const user = await this.userService.getProfile(userId);
-    const calendarClient = getCalendarClient(user.refresh_token);
+    const client = await this.getClient(user.id);
 
     const updatedMin = user.user_state?.last_calendar_sync
       ? dayjs(user.user_state.last_calendar_sync).toISOString()
       : undefined; // If never sync before, get all calendar events
 
-    const calendarList = await calendarClient.events.list({
+    const calendarList = await client.events.list({
       calendarId: 'primary',
       updatedMin,
     });

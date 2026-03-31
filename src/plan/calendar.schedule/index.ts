@@ -2,9 +2,11 @@ import { Injectable } from '@nestjs/common';
 import dayjs from 'dayjs';
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
+import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { withRetry } from 'src/utils';
 import { z } from 'zod';
 import { ITaskScheduleProps } from '../interfaces';
 import {
@@ -14,6 +16,8 @@ import {
 import { schedulePrompt } from './prompt';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
+
+const limit = pLimit(2);
 
 @Injectable()
 export class CalendarScheduleService {
@@ -47,6 +51,8 @@ export class CalendarScheduleService {
 
     // schedule event into calendar
     const applyScheduleRes = await applySchedule({
+      userId,
+      planId: id,
       client: this.calendarService,
       data: generatedSchedule,
     });
@@ -120,7 +126,7 @@ const generateTaskSchedule = async ({
   };
 
   const mapBack = (
-    refMap: Record<string, Record<string, unknown>>,
+    refMap: ReturnType<typeof mapToRefs>['refMap'],
     schedule: IGenerateScheduleResponse['schedule'],
   ) => {
     return {
@@ -181,7 +187,7 @@ const generateTaskSchedule = async ({
 
   const outputFormat = {
     ...restOutputParsed,
-    schedule: mapBack(refMapData.refMap, schedule),
+    ...mapBack(refMapData.refMap, schedule),
   };
 
   return {
@@ -198,10 +204,86 @@ interface IGenerateTaskSchedule {
   calendar: Awaited<ReturnType<typeof getCalendarWithScope>>;
 }
 
-const applySchedule = async ({ data }: IScheduleEventToCalendar) => {
-  return new Promise((resolve) => resolve(data));
+const applySchedule = async ({
+  userId,
+  planId,
+  client,
+  data,
+}: IScheduleEventToCalendar) => {
+  const {
+    outputFormat: { schedule },
+  } = data;
+
+  const eventRes = await Promise.all(
+    schedule.map((record) =>
+      limit(() =>
+        withRetry(() =>
+          insertCalendarEvent({
+            userId,
+            planId,
+            client,
+            event: record,
+          }),
+        ),
+      ),
+    ),
+  );
+
+  return {
+    schedule,
+    eventRes,
+  };
 };
 interface IScheduleEventToCalendar {
+  planId: string;
+  userId: string;
   client: CalendarService;
   data: Awaited<ReturnType<typeof generateTaskSchedule>>;
+}
+
+const insertCalendarEvent = async ({
+  userId,
+  planId,
+  client,
+  event,
+}: IInsertCalendarEvent) => {
+  const privateProperties: Pick<
+    Required<IEventPrivateProperties>,
+    'plan_id' | 'task_id'
+  > = {
+    plan_id: planId,
+    task_id: event.id,
+  };
+
+  const createdCalendarEvent = await client.insertEvent({
+    userId,
+    request: {
+      params: {
+        calendarId: 'primary',
+        requestBody: {
+          summary: event.title,
+          start: {
+            dateTime: event.start,
+          },
+          end: {
+            dateTime: event.end,
+          },
+          extendedProperties: {
+            private: privateProperties,
+          },
+        },
+      },
+    },
+  });
+
+  return createdCalendarEvent;
+};
+interface IInsertCalendarEvent
+  extends Pick<IScheduleEventToCalendar, 'userId' | 'planId' | 'client'> {
+  event: IScheduleEventToCalendar['data']['outputFormat']['schedule'][number];
+}
+
+interface IEventPrivateProperties {
+  plan_id?: string;
+  task_id?: string;
 }
