@@ -1,3 +1,6 @@
+import { EPlanStatus } from '@prisma/client';
+import { PrismaService } from 'src/prisma/prisma.service';
+
 interface IUserReq {
   userId: string;
 }
@@ -20,4 +23,10 @@ export type IRemovePlanProps = IUserReq & {
 
 export interface ITaskScheduleProps extends IUserReq {
   id: string;
+}
+
+export interface IUpdatePlanStatus {
+  id: string;
+  status: EPlanStatus;
+  client: PrismaService;
 }

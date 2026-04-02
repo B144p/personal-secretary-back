@@ -8,6 +8,7 @@ import {
   IGetListProps,
   IPlanActionProps,
   IRemovePlanProps,
+  IUpdatePlanStatus,
 } from './interfaces';
 import { GeneratePlanService } from './plan.generate';
 
@@ -104,9 +105,16 @@ export class PlanService {
       typeof this.calendarScheduleService.generateAndApplyTaskSchedule
     >[0],
   ) {
-    return await this.calendarScheduleService.generateAndApplyTaskSchedule(
-      data,
-    );
+    const scheduleRes =
+      await this.calendarScheduleService.generateAndApplyTaskSchedule(data);
+
+    await updatePlanStatus({
+      id: data.id,
+      status: EPlanStatus.SCHEDULED,
+      client: this.prisma,
+    });
+
+    return scheduleRes;
   }
 
   // TODO: Refactor for reduce complexity
@@ -117,18 +125,14 @@ export class PlanService {
     });
     if (typeof plan === 'string') return plan;
 
-    const updatePlanStatus = async (id: string, status: EPlanStatus) => {
-      await this.prisma.plan.update({
-        where: { id },
-        data: { status },
-      });
-      return `Trigger ${mode} on #${id} plan success.`;
-    };
-
     const approveAction = async () => {
       switch (plan.status) {
         case EPlanStatus.DRAFT:
-          return await updatePlanStatus(id, EPlanStatus.READY);
+          return await updatePlanStatus({
+            id,
+            status: EPlanStatus.READY,
+            client: this.prisma,
+          });
         case EPlanStatus.HOLD:
         case EPlanStatus.READY:
         case EPlanStatus.SCHEDULED:
@@ -145,7 +149,11 @@ export class PlanService {
         case EPlanStatus.HOLD:
         case EPlanStatus.READY:
         case EPlanStatus.SCHEDULED:
-          return await updatePlanStatus(id, EPlanStatus.HOLD);
+          return await updatePlanStatus({
+            id,
+            status: EPlanStatus.HOLD,
+            client: this.prisma,
+          });
         default:
           throw new Error('Status is out of scope.');
       }
@@ -177,3 +185,11 @@ export class PlanService {
     return `Remove plan success.`;
   }
 }
+
+const updatePlanStatus = async ({ id, status, client }: IUpdatePlanStatus) => {
+  await client.plan.update({
+    where: { id },
+    data: { status },
+  });
+  return `Trigger ${status} on #${id} plan success.`;
+};

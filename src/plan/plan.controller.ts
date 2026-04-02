@@ -69,17 +69,10 @@ export class PlanController {
 
   @Patch(':id/schedule')
   @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
-  taskSchedule(
-    @Req() req: Request,
-    @Param('id') id: string,
-    // @Body() schedulePlanDto: SchedulePlanDto,
-  ) {
+  taskSchedule(@Req() req: Request, @Param('id') id: string) {
     return this.planService.generateAndApplyTaskSchedule({
       userId: validateJwtPayload(req.user).sub,
       id,
-      // data: {
-      //   ...schedulePlanDto,
-      // },
     });
   }
 
