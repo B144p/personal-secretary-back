@@ -1,12 +1,19 @@
 import { Injectable } from '@nestjs/common';
 import { EEventCategory } from '@prisma/client';
 import dayjs from 'dayjs';
+import pLimit from 'p-limit';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { getCalendarClient } from './calendar.client';
-import { IGetCalendarRangeProps, IInsertEvent } from './interfaces';
+import {
+  IGetCalendarRangeProps,
+  IInsertEvent,
+  IRemoveEvents,
+} from './interfaces';
 import { categorizeMockup } from './mocks';
+
+const limit = pLimit(2);
 
 @Injectable()
 export class CalendarService {
@@ -177,6 +184,20 @@ export class CalendarService {
       results: dataFormat,
       count: dataFormat.length,
     };
+  }
+
+  async removeEvents({
+    client,
+    calendarId = 'primary',
+    events,
+  }: IRemoveEvents) {
+    await Promise.all(
+      events.map((eventId) =>
+        limit(() => client.events.delete({ calendarId, eventId })),
+      ) ?? [],
+    );
+
+    return 'Remove events success.';
   }
 }
 

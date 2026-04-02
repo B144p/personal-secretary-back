@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { EPlanStatus } from '@prisma/client';
+import { EPlanStatus, ETaskStatus } from '@prisma/client';
+import { CalendarService } from 'src/calendar/calendar.service';
+import { IHoldPlanProps } from 'src/calendar/interfaces';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
@@ -17,6 +19,7 @@ export class PlanService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
+    private readonly calendarService: CalendarService,
     private readonly calendarScheduleService: CalendarScheduleService,
     private readonly generatePlanService: GeneratePlanService,
   ) {}
@@ -149,10 +152,11 @@ export class PlanService {
         case EPlanStatus.HOLD:
         case EPlanStatus.READY:
         case EPlanStatus.SCHEDULED:
-          return await updatePlanStatus({
+          return await holdPlan({
             id,
-            status: EPlanStatus.HOLD,
+            userId,
             client: this.prisma,
+            calendar: this.calendarService,
           });
         default:
           throw new Error('Status is out of scope.');
@@ -193,3 +197,57 @@ const updatePlanStatus = async ({ id, status, client }: IUpdatePlanStatus) => {
   });
   return `Trigger ${status} on #${id} plan success.`;
 };
+
+const holdPlan = async ({ id, userId, client, calendar }: IHoldPlanProps) => {
+  await updatePlanStatus({
+    id,
+    status: EPlanStatus.HOLD,
+    client,
+  });
+
+  // delete event except task_status Done
+  const calendarClient = await calendar.getClient(userId);
+
+  const relatedEvents = await calendarClient.events.list({
+    calendarId: 'primary',
+    privateExtendedProperty: [`plan_id=${id}`],
+  });
+
+  // Note: can migrate source_id into task model for easily manage schedule event
+  const staleTasks = await client.task.findMany({
+    where: {
+      plan_id: id,
+      status: {
+        not: ETaskStatus.DONE,
+      },
+    },
+  });
+
+  // filter events which related task is not done yet
+  const focusDeleteEventIds =
+    relatedEvents.data.items?.reduce(
+      (acc: Array<string>, { id, extendedProperties }) => {
+        const { task_id } =
+          extendedProperties?.private as IEventPrivateProperties;
+
+        if (staleTasks.some((task) => task.id === task_id)) {
+          acc.push(id!);
+        }
+
+        return acc;
+      },
+      [],
+    ) ?? [];
+
+  // remove events
+  return await calendar.removeEvents({
+    client: calendarClient,
+    calendarId: 'primary',
+    events: focusDeleteEventIds,
+  });
+};
+
+interface IEventPrivateProperties {
+  plan_id?: string;
+  task_id?: string;
+}
