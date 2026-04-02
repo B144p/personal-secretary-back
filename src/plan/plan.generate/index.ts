@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
+import { calendar_v3 } from 'googleapis';
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
+import pLimit from 'p-limit';
+import { CalendarService } from 'src/calendar/calendar.service';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -17,6 +20,7 @@ import type {
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
+const calendarLimit = pLimit(2);
 
 @Injectable()
 export class GeneratePlanService {
@@ -24,6 +28,7 @@ export class GeneratePlanService {
     private readonly openai: OpenAI,
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
+    private readonly calendarService: CalendarService,
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
@@ -50,14 +55,21 @@ export class GeneratePlanService {
       },
     });
     const user = await this.userService.getProfile(userId);
-    const createdPlan = await upsertPlan({
+    const upsertedPlan = await upsertPlan({
       user,
       client: this.prisma,
       plan: reGeneratedPlan.output,
       planId: data.id,
     });
 
-    return createdPlan;
+    // remove events related to the plan in calendar
+    const calendarClient = await this.calendarService.getClient(userId);
+    await removeRelatedCalendarEvent({
+      client: calendarClient,
+      planId: data.id,
+    });
+
+    return upsertedPlan;
   }
 }
 
@@ -159,6 +171,7 @@ const updatePlan = async ({
   plan,
   planId,
 }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
+  // This phase: replace all existing tasks with re-generated tasks.
   const { tasks, ...restCreatedPlan } = await client.plan.update({
     where: {
       id: planId,
@@ -166,6 +179,7 @@ const updatePlan = async ({
     },
     data: {
       title: plan.goal,
+      status: EPlanStatus.DRAFT,
       tasks: {
         deleteMany: {
           plan_id: planId,
@@ -242,5 +256,33 @@ const reGenerateTask = async ({
   return {
     usage: llmRes.usage,
     output: outputParsed,
+  };
+};
+
+const removeRelatedCalendarEvent = async ({
+  client,
+  planId,
+}: {
+  client: calendar_v3.Calendar;
+  planId: string;
+}) => {
+  const relateEvents = await client.events.list({
+    calendarId: 'primary',
+    privateExtendedProperty: [`plan_id=${planId}`],
+  });
+
+  await Promise.all(
+    relateEvents.data.items?.map((event) =>
+      calendarLimit(() =>
+        client.events.delete({
+          calendarId: 'primary',
+          eventId: event.id ?? undefined,
+        }),
+      ),
+    ) ?? [],
+  );
+
+  return {
+    message: 'Related calendar events are removed successfully.',
   };
 };
