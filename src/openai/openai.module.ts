@@ -5,7 +5,6 @@ import { UserModule } from 'src/user/user.module';
 import { CalendarClassifierService } from './calendar.classifier';
 import { CalendarGeneratorService } from './calendar.generate';
 import { OpenAIService } from './openai.service';
-import { TaskGeneratorService } from './task.generate';
 
 @Global()
 @Module({
@@ -23,7 +22,6 @@ import { TaskGeneratorService } from './task.generate';
     OpenAIService,
     CalendarClassifierService,
     CalendarGeneratorService,
-    TaskGeneratorService,
   ],
   exports: [OpenAIService],
 })

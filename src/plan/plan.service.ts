@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { EPlanStatus } from '@prisma/client';
-import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
@@ -10,18 +9,21 @@ import {
   IPlanActionProps,
   IRemovePlanProps,
 } from './interfaces';
+import { GeneratePlanService } from './plan.generate';
 
 @Injectable()
 export class PlanService {
   constructor(
-    private readonly openAIService: OpenAIService,
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
     private readonly calendarScheduleService: CalendarScheduleService,
+    private readonly generatePlanService: GeneratePlanService,
   ) {}
 
-  async generate(data: Parameters<typeof this.openAIService.generatePlan>[0]) {
-    return await this.openAIService.generatePlan(data);
+  async generate(
+    data: Parameters<typeof this.generatePlanService.generatePlan>[0],
+  ) {
+    return await this.generatePlanService.generatePlan(data);
   }
 
   async getList({ userId }: IGetListProps) {
@@ -80,9 +82,21 @@ export class PlanService {
   }
 
   async reGenerate(
-    data: Parameters<typeof this.openAIService.reGeneratePlan>[0],
+    data: Pick<
+      Parameters<typeof this.generatePlanService.reGeneratePlan>[0],
+      'userId' | 'data'
+    >,
   ) {
-    return await this.openAIService.reGeneratePlan(data);
+    const earlierTask = await this.getDetail({
+      id: data.data.id,
+      userId: data.userId,
+    });
+    if (typeof earlierTask === 'string') return earlierTask;
+
+    return await this.generatePlanService.reGeneratePlan({
+      ...data,
+      earlierTask,
+    });
   }
 
   async generateAndApplyTaskSchedule(

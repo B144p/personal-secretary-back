@@ -1,8 +1,8 @@
 import OpenAI from 'openai';
-import { GeneratePlanDto } from 'src/plan/dto/generate-plan.dto';
-import { ReGeneratePlanDto } from 'src/plan/dto/re-generate-plan.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
+import { GeneratePlanDto } from '../dto/generate-plan.dto';
+import { ReGeneratePlanDto } from '../dto/re-generate-plan.dto';
 import { IGeneratePlanResponse } from '../schemas';
 
 export interface IGeneratePlanProps {
@@ -10,14 +10,25 @@ export interface IGeneratePlanProps {
   prompt: GeneratePlanDto;
 }
 
-export interface IReGeneratePlanProps {
-  userId: string;
-  data: ReGeneratePlanDto & { id: string };
-}
-
 export interface IGenerateTaskProps {
   client: OpenAI;
   prompt: GeneratePlanDto;
+}
+
+export interface IUpsertPlanProps {
+  user: Awaited<ReturnType<UserService['getProfile']>>;
+  client: PrismaService;
+  plan: IGeneratePlanResponse;
+  planId?: string;
+}
+
+export interface IReGeneratePlanProps {
+  userId: string;
+  earlierTask: {
+    title: string;
+    tasks: Array<string>;
+  };
+  data: ReGeneratePlanDto & { id: string };
 }
 
 export interface IReGenerateTaskProps {
@@ -28,17 +39,4 @@ export interface IReGenerateTaskProps {
       tasks: Array<string>;
     };
   };
-}
-
-export interface IGetPlanProps {
-  client: PrismaService;
-  id: string;
-  userId: string;
-}
-
-export interface IUpsertPlanProps {
-  user: Awaited<ReturnType<UserService['getProfile']>>;
-  client: PrismaService;
-  plan: IGeneratePlanResponse;
-  planId?: string;
 }

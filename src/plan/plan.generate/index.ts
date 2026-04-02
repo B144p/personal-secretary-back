@@ -2,29 +2,28 @@ import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
+import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { z } from 'zod';
-import {
+import { generatePlanResponseSchema } from '../schemas';
+import type {
   IGeneratePlanProps,
   IGenerateTaskProps,
-  IGetPlanProps,
   IReGeneratePlanProps,
   IReGenerateTaskProps,
   IUpsertPlanProps,
-} from './interfaces';
+} from './interface';
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
-import { generatePlanResponseSchema } from './schemas';
-import { validateOpenAIResponse } from './utils';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
 @Injectable()
-export class TaskGeneratorService {
+export class GeneratePlanService {
   constructor(
-    private readonly userService: UserService,
     private readonly openai: OpenAI,
     private readonly prisma: PrismaService,
+    private readonly userService: UserService,
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
@@ -42,24 +41,12 @@ export class TaskGeneratorService {
     return createdPlan;
   }
 
-  async reGeneratePlan({ userId, data }: IReGeneratePlanProps) {
-    const earlierTasks = await getPlan({
-      client: this.prisma,
-      id: data.id,
-      userId,
-    });
-    if (!earlierTasks) return 'Plan is not found!';
-
-    const formatedEarlierTasks = {
-      title: earlierTasks.title,
-      tasks: earlierTasks.tasks.map(({ title }) => title),
-    };
-
+  async reGeneratePlan({ userId, earlierTask, data }: IReGeneratePlanProps) {
     const reGeneratedPlan = await reGenerateTask({
       client: this.openai,
       data: {
         feedback: data.feedback,
-        earlierTask: formatedEarlierTasks,
+        earlierTask,
       },
     });
     const user = await this.userService.getProfile(userId);
@@ -83,14 +70,10 @@ const generateTask = async ({
     input: [
       {
         role: 'system',
-        content: [
-          { type: 'input_text', text: generatePlanPrompt.instruction },
-          // {
-          //   type: 'input_text',
-          //   text: generatePlanPrompt.explainOutputSchema,
-          // },
-          { type: 'input_text', text: generatePlanPrompt.rules },
-        ],
+        content: Object.values(generatePlanPrompt.system).map((prompt) => ({
+          type: 'input_text',
+          text: prompt,
+        })),
       },
       {
         role: 'user',
@@ -127,60 +110,30 @@ const generateTask = async ({
   };
 };
 
-const reGenerateTask = async ({
-  client,
-  data: { feedback, earlierTask },
-}: IReGenerateTaskProps) => {
-  const llmRes = await client.responses.parse({
-    model: CHAT_MODEL,
-    input: [
-      {
-        role: 'system',
-        content: [
-          { type: 'input_text', text: reGeneratePlanPrompt.instruction },
-          { type: 'input_text', text: reGeneratePlanPrompt.rules },
-        ],
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: `Existing Tasks: ${JSON.stringify(earlierTask)}`,
-          },
-          {
-            type: 'input_text',
-            text: `User Feedback: ${feedback ?? 'Nothing'}`,
-          },
-        ],
-      },
-    ],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'plan',
-        strict: true,
-        schema: z.toJSONSchema(generatePlanResponseSchema),
-      },
-    },
-  });
-
-  const outputParsed = validateOpenAIResponse(
-    generatePlanResponseSchema,
-    llmRes.output_parsed,
-  );
-
-  return {
-    usage: llmRes.usage,
-    output: outputParsed,
-  };
+const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
+  if (planId) return await updatePlan({ user, client, plan, planId });
+  return await createPlan({ user, client, plan });
 };
 
-const getPlan = async ({ client, id, userId }: IGetPlanProps) => {
-  return await client.plan.findUnique({
-    where: {
-      id,
-      user_id: userId,
+const createPlan = async ({
+  user,
+  client,
+  plan,
+}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
+  const { tasks, ...restCreatedPlan } = await client.plan.create({
+    data: {
+      user_id: user.id,
+      title: plan.goal,
+      source_type: EPlanSourceType.GENERATE,
+      status: EPlanStatus.DRAFT,
+      tasks: {
+        createMany: {
+          data: plan.tasks.map((task) => ({
+            title: task,
+            status: ETaskStatus.PENDING,
+          })),
+        },
+      },
     },
     include: {
       tasks: {
@@ -189,12 +142,15 @@ const getPlan = async ({ client, id, userId }: IGetPlanProps) => {
         },
       },
     },
+    omit: {
+      user_id: true,
+    },
   });
-};
 
-const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
-  if (planId) return await updatePlan({ user, client, plan, planId });
-  return await createPlan({ user, client, plan });
+  return {
+    ...restCreatedPlan,
+    tasks: tasks.map(({ title }) => title),
+  };
 };
 
 const updatePlan = async ({
@@ -240,40 +196,51 @@ const updatePlan = async ({
   };
 };
 
-const createPlan = async ({
-  user,
+const reGenerateTask = async ({
   client,
-  plan,
-}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
-  const { tasks, ...restCreatedPlan } = await client.plan.create({
-    data: {
-      user_id: user.id,
-      title: plan.goal,
-      source_type: EPlanSourceType.GENERATE,
-      status: EPlanStatus.DRAFT,
-      tasks: {
-        createMany: {
-          data: plan.tasks.map((task) => ({
-            title: task,
-            status: ETaskStatus.PENDING,
-          })),
-        },
+  data: { feedback, earlierTask },
+}: IReGenerateTaskProps) => {
+  const llmRes = await client.responses.parse({
+    model: CHAT_MODEL,
+    input: [
+      {
+        role: 'system',
+        content: Object.values(reGeneratePlanPrompt.system).map((prompt) => ({
+          type: 'input_text',
+          text: prompt,
+        })),
       },
-    },
-    include: {
-      tasks: {
-        select: {
-          title: true,
-        },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: `Existing Tasks: ${JSON.stringify(earlierTask)}`,
+          },
+          {
+            type: 'input_text',
+            text: `User Feedback: ${feedback ?? 'Nothing'}`,
+          },
+        ],
       },
-    },
-    omit: {
-      user_id: true,
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: 'plan',
+        strict: true,
+        schema: z.toJSONSchema(generatePlanResponseSchema),
+      },
     },
   });
 
+  const outputParsed = validateOpenAIResponse(
+    generatePlanResponseSchema,
+    llmRes.output_parsed,
+  );
+
   return {
-    ...restCreatedPlan,
-    tasks: tasks.map(({ title }) => title),
+    usage: llmRes.usage,
+    output: outputParsed,
   };
 };

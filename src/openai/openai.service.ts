@@ -4,7 +4,6 @@ import {
   CalendarGeneratorService,
   IGenerateCalendarResponse,
 } from './calendar.generate';
-import { TaskGeneratorService } from './task.generate';
 
 // Problem found: import module to each other => need forwardRef
 // TODO: refactor it to pure infra. => move each business logic to own module => add layer for orchestrate it instead
@@ -13,20 +12,7 @@ export class OpenAIService {
   constructor(
     private readonly calendarClassifierService: CalendarClassifierService,
     private readonly calendarGenerator: CalendarGeneratorService,
-    private readonly taskGeneratorService: TaskGeneratorService,
   ) {}
-
-  async generatePlan(
-    data: Parameters<typeof this.taskGeneratorService.generatePlan>[0],
-  ) {
-    return await this.taskGeneratorService.generatePlan(data);
-  }
-
-  async reGeneratePlan(
-    data: Parameters<typeof this.taskGeneratorService.reGeneratePlan>[0],
-  ) {
-    return await this.taskGeneratorService.reGeneratePlan(data);
-  }
 
   async classifyRules(summaries: string[]) {
     return await this.calendarClassifierService.classifyEvent(summaries);
