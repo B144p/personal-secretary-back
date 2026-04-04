@@ -3,7 +3,6 @@ import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import { calendar_v3 } from 'googleapis';
 import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
-import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -20,7 +19,6 @@ import type {
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
-const calendarLimit = pLimit(2);
 
 @Injectable()
 export class GeneratePlanService {
@@ -66,6 +64,7 @@ export class GeneratePlanService {
     const calendarClient = await this.calendarService.getClient(userId);
     await removeRelatedCalendarEvent({
       client: calendarClient,
+      calendar: this.calendarService,
       planId: data.id,
     });
 
@@ -261,9 +260,11 @@ const reGenerateTask = async ({
 
 const removeRelatedCalendarEvent = async ({
   client,
+  calendar,
   planId,
 }: {
   client: calendar_v3.Calendar;
+  calendar: CalendarService;
   planId: string;
 }) => {
   const relateEvents = await client.events.list({
@@ -271,16 +272,17 @@ const removeRelatedCalendarEvent = async ({
     privateExtendedProperty: [`plan_id=${planId}`],
   });
 
-  await Promise.all(
-    relateEvents.data.items?.map((event) =>
-      calendarLimit(() =>
-        client.events.delete({
-          calendarId: 'primary',
-          eventId: event.id ?? undefined,
-        }),
-      ),
-    ) ?? [],
-  );
+  const focusDeleteEventIds =
+    relateEvents.data.items?.reduce((acc: string[], event) => {
+      if (event.id) acc.push(event.id);
+      return acc;
+    }, []) ?? [];
+
+  await calendar.removeEvents({
+    client,
+    calendarId: 'primary',
+    events: focusDeleteEventIds,
+  });
 
   return {
     message: 'Related calendar events are removed successfully.',
