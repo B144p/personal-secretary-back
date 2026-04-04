@@ -19,6 +19,7 @@ model User {
   update_at     DateTime @updatedAt
 
   user_state UserState?
+  plan       Plan[]
 
   @@map("user")
 }
@@ -29,29 +30,36 @@ model UserState {
 
   last_calendar_sync DateTime?
 
-  user User @relation(fields: [user_id], references: [id])
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@map("user_state")
 }
 
 model Plan {
-  id         String   @id @default(uuid())
-  title      String
-  created_at DateTime @default(now())
+  id          String           @id @default(uuid())
+  user_id     String
+  title       String
+  source_id   String?
+  source_type EPlanSourceType?
+  status      EPlanStatus
 
+  create_at DateTime @default(now())
+  update_at DateTime @updatedAt
+
+  user  User   @relation(fields: [user_id], references: [id])
   tasks Task[]
 
   @@map("plan")
 }
 
 model Task {
-  id              String   @id @default(uuid())
-  plan_id         String
-  title           String
-  estimated_hours Int
-  priority        String
-  status          String
-  created_at      DateTime @default(now())
+  id      String      @id @default(uuid())
+  plan_id String
+  title   String
+  status  ETaskStatus @default(HOLD)
+
+  create_at DateTime @default(now())
+  update_at DateTime @updatedAt
 
   plan Plan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
 
@@ -102,4 +110,23 @@ enum EEventCategory {
   HEALTH
   PERSONAL
   UNKNOWN
+}
+
+enum EPlanSourceType {
+  GENERATE
+  CALENDAR
+}
+
+enum EPlanStatus {
+  DRAFT
+  READY
+  SCHEDULED
+  HOLD
+}
+
+enum ETaskStatus {
+  HOLD
+  PENDING
+  INPROGRESS
+  DONE
 }

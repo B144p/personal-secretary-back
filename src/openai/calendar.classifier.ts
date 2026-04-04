@@ -5,6 +5,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { z } from 'zod';
 import { classifyRulesPrompt } from './prompt';
 import { CategoryRulesSchema, ICategoryRulesResponse } from './schemas';
+import { validateOpenAIResponse } from './utils';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
@@ -69,7 +70,10 @@ const classifyEventWithOpenAI = async ({
     },
   });
 
-  const outputParsed = validateCategoryRuleResponse(llmRes.output_parsed);
+  const outputParsed = validateOpenAIResponse(
+    CategoryRulesSchema,
+    llmRes.output_parsed,
+  );
   const outputFormat = {
     ...outputParsed,
     results: outputParsed.results.map((result, index) => ({
@@ -82,20 +86,6 @@ const classifyEventWithOpenAI = async ({
     usage: llmRes.usage,
     outputFormat,
   };
-};
-
-const validateCategoryRuleResponse = (rawResponse: unknown) => {
-  if (!rawResponse) {
-    throw new Error('Response from OpenAI is null');
-  }
-
-  const parsed = CategoryRulesSchema.safeParse(rawResponse);
-  if (!parsed.success) {
-    throw new Error(
-      `Wrong format response from OpenAI: ${JSON.stringify(parsed.error.issues)}`,
-    );
-  }
-  return parsed.data;
 };
 
 const upsertCategoryRule = async ({

@@ -5,6 +5,7 @@ import { ChatModel } from 'openai/resources';
 import { z } from 'zod';
 import { CalendarClassifierService } from './calendar.classifier';
 import { CalendarGeneratorSchema } from './schemas';
+import { validateOpenAIResponse } from './utils';
 
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
@@ -82,7 +83,10 @@ const summaryGenerator = async ({ client, amount }: ISummaryGeneratorProps) => {
     },
   });
 
-  const outputParsed = validateSumaryGeneratorResponse(llmRes.output_parsed);
+  const outputParsed = validateOpenAIResponse(
+    CalendarGeneratorSchema,
+    llmRes.output_parsed,
+  );
 
   return {
     usage: llmRes.usage,
@@ -91,20 +95,6 @@ const summaryGenerator = async ({ client, amount }: ISummaryGeneratorProps) => {
       count: outputParsed.results.length,
     },
   };
-};
-
-const validateSumaryGeneratorResponse = (rawResponse: unknown) => {
-  if (!rawResponse) {
-    throw new Error('Response from OpenAI is null');
-  }
-
-  const parsed = CalendarGeneratorSchema.safeParse(rawResponse);
-  if (!parsed.success) {
-    throw new Error(
-      `Wrong format response from OpenAI: ${JSON.stringify(parsed.error.issues)}`,
-    );
-  }
-  return parsed.data;
 };
 
 interface ISummaryGeneratorProps {
