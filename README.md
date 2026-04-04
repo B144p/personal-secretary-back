@@ -1,47 +1,95 @@
 # Personal Secretary
 
-Personal Secretary is a rule-driven assistant built on top of Google Calendar.  
-It transforms simple calendar events into structured, actionable tasks.  
-Implement LLM for classify event and generate task.
+First idea of this project:
 
-Instead of acting as a passive reminder system, it behaves like a digital secretary — helping you prepare, execute, and follow up on what you schedule.
+I want something that helps me figure out what I should do **before starting any plan**.
 
-This project focuses on clarity, intent, and task lifecycle management rather than automation for its own sake.
+For example, in my calendar I might have an event like:
 
-## Core Idea
+```text
+Planning sprint for feature ___
+```
 
-A calendar event is not a task.  
-When users create an event, they usually record an intention, not a complete action plan.
+Normally, that’s just a title. It doesn’t really tell me what I should do.
 
-Example:
+So the system will:
 
-- “Submit tax”
-- “Side project”
-- “Doctor appointment”
-- “Workout”
+- categorize it (like → `MEETING`)
+- then generate what I should prepare
 
-Traditional calendars only store time.
+Something like:
 
-Personal Secretary:
+- Review features
+- Recheck current implementation
+- Recheck any info or resources needed
 
-1. Normalizes event data
-2. Categorizes event structure
-3. Determines task intent
-4. Generates structured draft tasks
-5. Tracks task lifecycle
-6. Adapts based on feedback
+So it’s more like generating **preparation tasks** for the main task.
 
-The system is rule-based and deterministic.
-LLM is used only as a bounded helper for interpretation or task breakdown — never as the core decision engine.
+That’s why I named it **“Personal Secretary”**.
 
-## Current Plan (In progress)
+## But now…
 
-- Fetch calendar event
-- Structural categorization design
-- Rule-based classify event
-- LLM classify event
-- Task system design
-- Event shift handling concept
-- Task Generate by topic
+At this phase, the idea changed a bit.
 
-This phase focuses on strong architecture before automation.
+Now I’m focusing more on:
+
+- Feed a goal → let LLM generate tasks to reach that goal
+- Generate a schedule that leads to the goal in an efficient way
+- Use existing calendar apps (they already handle reminders well)
+
+So instead of replacing calendar apps, I just build on top of them.
+
+## Flow I’m thinking about
+
+1. Input a goal
+2. Generate tasks
+3. Generate schedule
+4. Do the tasks
+5. End of the day → update status (like a daily report)
+6. System adjusts everything
+
+## Important part
+
+After feedback:
+
+- system knows what is done / not done
+- unfinished tasks will be rescheduled
+- event time will be extended if needed
+- other events will be shifted
+- then generate a new schedule again
+
+## How I see it now
+
+For now, It’s not like a “personal secretary” anymore.
+
+It’s more like a:
+
+```text
+Personal Product Owner
+```
+
+That will:
+
+- plan your sprint
+- track your tasks
+- update things when reality doesn’t match the plan
+
+## Why I’m building this
+
+Main reason:
+
+> boost my own productivity
+
+Also:
+
+- I don’t want to think too much about planning every time
+- Just analyze requirement and generate task for the first time
+- I just want a system that tells me what to do next
+
+## Plan
+
+Build this for myself first.
+
+If it works well, I can do another project more efficiently.
+
+That’s it 👍
