@@ -20,6 +20,23 @@ services:
       - default
       - monitor_network
 
+  # port-backend:
+  #   container_name: portfolio-backend
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #     target: deploy
+  #   restart: always
+  #   env_file:
+  #     - .env
+  #   ports:
+  #     - '${PORT}:3000'
+  #   # networks:
+  #   #   - default
+  #   depends_on:
+  #     personal_secretary_postgres:
+  #       condition: service_healthy
+
 volumes:
   personal_secretary_db_data:
 

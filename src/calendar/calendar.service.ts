@@ -145,9 +145,7 @@ export class CalendarService {
 
     const dataFormat =
       calendarList.data.items?.map(
-        ({ kind, etag, created, updated, ...rest }) => {
-          return rest;
-        },
+        ({ kind: _k, etag: _e, created: _c, updated: _u, ...rest }) => rest,
       ) ?? [];
 
     return {

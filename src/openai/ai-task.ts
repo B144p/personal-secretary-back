@@ -5,8 +5,7 @@ export enum AiTask {
 }
 
 export function getModelForTask(task: AiTask): string {
-  const planModel =
-    process.env.OPENAI_MODEL_PLAN_GENERATION ?? 'gpt-5';
+  const planModel = process.env.OPENAI_MODEL_PLAN_GENERATION ?? 'gpt-5';
   switch (task) {
     case AiTask.PLAN_GENERATION:
       return planModel;

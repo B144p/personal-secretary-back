@@ -10,13 +10,14 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY_NAME) {
   constructor() {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
-        (req: Request) => req?.cookies?.jwt ?? null,
+        (req: Request) =>
+          (req?.cookies as Record<string, string> | undefined)?.jwt ?? null,
       ]),
       secretOrKey: getRequiredEnv('JWT_SECRET_KEY'),
     });
   }
 
-  validate(payload: IJwtSignData) {
+  validate(payload: IJwtSignData): IJwtSignData {
     return payload;
   }
 }

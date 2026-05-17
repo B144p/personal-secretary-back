@@ -41,6 +41,6 @@ export class CryptoService {
       authTagLength: AUTH_TAG_LENGTH,
     });
     decipher.setAuthTag(authTag);
-    return decipher.update(encrypted) + decipher.final('utf8');
+    return decipher.update(encrypted).toString('utf8') + decipher.final('utf8');
   }
 }

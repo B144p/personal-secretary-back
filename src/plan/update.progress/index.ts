@@ -12,10 +12,13 @@ import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { withRetry } from 'src/utils';
 import { z } from 'zod';
-import { generateScheduleResponseSchema, IGenerateScheduleResponse } from '../schemas';
+import { generateScheduleResponseSchema } from '../schemas';
 import { schedulePrompt } from '../calendar.schedule/prompt';
 import { CalendarScheduleService } from '../calendar.schedule';
-import type { IGetCurrentScheduleProps, IStatusChange, IUpdateProgressProps } from './interface';
+import type {
+  IGetCurrentScheduleProps,
+  IUpdateProgressProps,
+} from './interface';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -47,13 +50,24 @@ export class UpdateProgressService {
         },
       },
     });
-    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'No SCHEDULED plan found');
+    if (!plan)
+      throw new AppException(
+        AppErrorCode.PLAN_NOT_FOUND,
+        'No SCHEDULED plan found',
+      );
 
-    const userState = await this.prisma.userState.findUnique({ where: { user_id: userId } });
+    const userState = await this.prisma.userState.findUnique({
+      where: { user_id: userId },
+    });
     if (!userState) throw new Error('UserState not found');
 
     // 1. Reconcile calendar: absorb any manual moves of our events
-    await reconcileCalendarMoves({ userId, plan, calendarService: this.calendarService, prisma: this.prisma });
+    await reconcileCalendarMoves({
+      userId,
+      plan,
+      calendarService: this.calendarService,
+      prisma: this.prisma,
+    });
 
     // 2. Apply status changes
     if (statusChanges.length > 0) {
@@ -72,7 +86,8 @@ export class UpdateProgressService {
       data: {
         plan_id: plan.id,
         date: dayjs().tz(userState.time_zone).format('YYYY-MM-DD'),
-        status_changes: statusChanges as unknown as import('@prisma/client').Prisma.InputJsonValue,
+        status_changes:
+          statusChanges as unknown as import('@prisma/client').Prisma.InputJsonValue,
         context_text: contextText,
       },
     });
@@ -97,8 +112,15 @@ export class UpdateProgressService {
       .every((t) => t.status === ETaskStatus.DONE);
 
     if (allLeavesDone) {
-      await this.prisma.plan.update({ where: { id: plan.id }, data: { status: EPlanStatus.DONE } });
-      return { rescheduled: [], planStatus: EPlanStatus.DONE, unscheduledTaskIds: [] };
+      await this.prisma.plan.update({
+        where: { id: plan.id },
+        data: { status: EPlanStatus.DONE },
+      });
+      return {
+        rescheduled: [],
+        planStatus: EPlanStatus.DONE,
+        unscheduledTaskIds: [],
+      };
     }
 
     // 6. Identify slipped leaf tasks: PENDING or IN_PROGRESS with active event end in the past
@@ -112,7 +134,11 @@ export class UpdateProgressService {
     });
 
     if (slippedLeaves.length === 0) {
-      return { rescheduled: [], planStatus: EPlanStatus.SCHEDULED, unscheduledTaskIds: [] };
+      return {
+        rescheduled: [],
+        planStatus: EPlanStatus.SCHEDULED,
+        unscheduledTaskIds: [],
+      };
     }
 
     // 7. Re-schedule slipped + remaining unscheduled leaves
@@ -120,7 +146,10 @@ export class UpdateProgressService {
       (t) => leafIds.has(t.id) && t.status !== ETaskStatus.DONE,
     );
 
-    const calendarEvents = await getCalendarRange({ userId, calendarService: this.calendarService });
+    const calendarEvents = await getCalendarRange({
+      userId,
+      calendarService: this.calendarService,
+    });
 
     const mappedTasks = remainingLeaves.map((t) => ({
       id: t.id,
@@ -139,17 +168,26 @@ export class UpdateProgressService {
     });
 
     // 8. Apply new schedule: create Google events, update TaskEvents
-    const calClient = await this.calendarService.getClient(userId);
     const rescheduled: string[] = [];
     const unscheduledTaskIds: string[] = [];
 
     for (const item of newSchedule) {
       const taskId = item.taskId;
-      if (!taskId) { unscheduledTaskIds.push(String(item.task_ref)); continue; }
+      if (!taskId) {
+        unscheduledTaskIds.push(String(item.task_ref));
+        continue;
+      }
 
       try {
         const googleEventId = await withRetry(() =>
-          limit(() => insertCalendarEvent({ userId, planId: plan.id, client: this.calendarService, event: item })),
+          limit(() =>
+            insertCalendarEvent({
+              userId,
+              planId: plan.id,
+              client: this.calendarService,
+              event: item,
+            }),
+          ),
         );
 
         await this.prisma.$transaction([
@@ -176,14 +214,20 @@ export class UpdateProgressService {
       }
     }
 
-    return { rescheduled, planStatus: EPlanStatus.SCHEDULED, unscheduledTaskIds };
+    return {
+      rescheduled,
+      planStatus: EPlanStatus.SCHEDULED,
+      unscheduledTaskIds,
+    };
   }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const getLeafIds = (tasks: { id: string; parent_task_id: string | null }[]) => {
-  const parentSet = new Set(tasks.map((t) => t.parent_task_id).filter(Boolean) as string[]);
+  const parentSet = new Set(
+    tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
+  );
   return new Set(tasks.filter((t) => !parentSet.has(t.id)).map((t) => t.id));
 };
 
@@ -194,7 +238,13 @@ const reconcileCalendarMoves = async ({
   prisma,
 }: {
   userId: string;
-  plan: { id: string; tasks: Array<{ id: string; events: Array<{ id: string; google_event_id: string }> }> };
+  plan: {
+    id: string;
+    tasks: Array<{
+      id: string;
+      events: Array<{ id: string; google_event_id: string }>;
+    }>;
+  };
   calendarService: CalendarService;
   prisma: PrismaService;
 }) => {
@@ -206,7 +256,11 @@ const reconcileCalendarMoves = async ({
 
   const calMap: Record<string, { start: string; end: string }> = {};
   for (const e of calEvents.data.items ?? []) {
-    if (e.id) calMap[e.id] = { start: e.start?.dateTime ?? '', end: e.end?.dateTime ?? '' };
+    if (e.id)
+      calMap[e.id] = {
+        start: e.start?.dateTime ?? '',
+        end: e.end?.dateTime ?? '',
+      };
   }
 
   for (const task of plan.tasks) {
@@ -221,12 +275,31 @@ const reconcileCalendarMoves = async ({
   }
 };
 
-const getCalendarRange = async ({ userId, calendarService }: { userId: string; calendarService: CalendarService }) => {
+const getCalendarRange = async ({
+  userId,
+  calendarService,
+}: {
+  userId: string;
+  calendarService: CalendarService;
+}) => {
   const { results } = await calendarService.getCalendarRange({
     userId,
-    range: { timeMin: dayjs().toISOString(), timeMax: dayjs().add(1, 'month').toISOString() },
+    range: {
+      timeMin: dayjs().toISOString(),
+      timeMax: dayjs().add(1, 'month').toISOString(),
+    },
   });
-  return { results: results.map(({ extendedProperties, summary, start, end, description }) => ({ extendedProperties, summary, start, end, description })) };
+  return {
+    results: results.map(
+      ({ extendedProperties, summary, start, end, description }) => ({
+        extendedProperties,
+        summary,
+        start,
+        end,
+        description,
+      }),
+    ),
+  };
 };
 
 const rescheduleLeaves = async ({
@@ -237,7 +310,13 @@ const rescheduleLeaves = async ({
   contextText,
 }: {
   client: OpenAI;
-  tasks: Array<{ id: string; title: string; estimated_minutes: number | null; status: string; sequence_order: number }>;
+  tasks: Array<{
+    id: string;
+    title: string;
+    estimated_minutes: number | null;
+    status: string;
+    sequence_order: number;
+  }>;
   calendar: { results: unknown[] };
   userState: UserState;
   contextText?: string;
@@ -246,7 +325,11 @@ const rescheduleLeaves = async ({
   const mappedTasks = tasks.map((t, i) => {
     const ref = `T${i + 1}`;
     refMap[ref] = t.id;
-    return { task_ref: ref, title: t.title, estimated_minutes: t.estimated_minutes };
+    return {
+      task_ref: ref,
+      title: t.title,
+      estimated_minutes: t.estimated_minutes,
+    };
   });
 
   const userConstraints = `
@@ -261,7 +344,10 @@ const rescheduleLeaves = async ({
     input: [
       {
         role: 'system',
-        content: Object.values(schedulePrompt.system).map((text) => ({ type: 'input_text' as const, text })),
+        content: Object.values(schedulePrompt.system).map((text) => ({
+          type: 'input_text' as const,
+          text,
+        })),
       },
       {
         role: 'developer',
@@ -276,9 +362,17 @@ const rescheduleLeaves = async ({
       {
         role: 'user',
         content: [
-          { type: 'input_text' as const, text: `#TASKS: ${JSON.stringify({ tasks: mappedTasks })}` },
-          { type: 'input_text' as const, text: `#EXISTING SCHEDULE: ${JSON.stringify({ schedule: calendar.results })}` },
-          ...(contextText ? [{ type: 'input_text' as const, text: `Context: ${contextText}` }] : []),
+          {
+            type: 'input_text' as const,
+            text: `#TASKS: ${JSON.stringify({ tasks: mappedTasks })}`,
+          },
+          {
+            type: 'input_text' as const,
+            text: `#EXISTING SCHEDULE: ${JSON.stringify({ schedule: calendar.results })}`,
+          },
+          ...(contextText
+            ? [{ type: 'input_text' as const, text: `Context: ${contextText}` }]
+            : []),
         ],
       },
     ],
@@ -292,8 +386,15 @@ const rescheduleLeaves = async ({
     },
   });
 
-  const { schedule } = validateOpenAIResponse(generateScheduleResponseSchema, llmRes.output_parsed);
-  return schedule.map(({ task_ref, ...rest }) => ({ ...rest, taskId: refMap[task_ref], task_ref }));
+  const { schedule } = validateOpenAIResponse(
+    generateScheduleResponseSchema,
+    llmRes.output_parsed,
+  );
+  return schedule.map(({ task_ref, ...rest }) => ({
+    ...rest,
+    taskId: refMap[task_ref],
+    task_ref,
+  }));
 };
 
 const insertCalendarEvent = async ({
@@ -323,6 +424,7 @@ const insertCalendarEvent = async ({
       },
     },
   });
-  if (!createdEvent.id) throw new Error('Google Calendar did not return event id');
+  if (!createdEvent.id)
+    throw new Error('Google Calendar did not return event id');
   return createdEvent.id;
 };

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -14,8 +15,8 @@ import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
-import { GeneratePlanDto } from './dto/generate-plan.dto';
-import { ReGeneratePlanDto } from './dto/re-generate-plan.dto';
+import { generatePlanSchema } from './dto/generate-plan.dto';
+import { reGeneratePlanSchema } from './dto/re-generate-plan.dto';
 import { PlanService } from './plan.service';
 import { UpdateProgressService } from './update.progress';
 
@@ -26,13 +27,13 @@ export class PlanController {
 
   @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @Post('generate')
-  async generate(
-    @Req() req: Request,
-    @Body() generatePlanDto: GeneratePlanDto,
-  ) {
+  async generate(@Req() req: Request, @Body() body: unknown) {
+    const parsed = generatePlanSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
     return await this.planService.generate({
       userId: validateJwtPayload(req.user).sub,
-      prompt: generatePlanDto,
+      prompt: parsed.data,
     });
   }
 
@@ -71,11 +72,14 @@ export class PlanController {
   reGenerate(
     @Req() req: Request,
     @Param('id') id: string,
-    @Body() reGeneratePlanDto: ReGeneratePlanDto,
+    @Body() body: unknown,
   ) {
+    const parsed = reGeneratePlanSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
     return this.planService.reGenerate({
       userId: validateJwtPayload(req.user).sub,
-      data: { ...reGeneratePlanDto, id },
+      data: { ...parsed.data, id },
     });
   }
 
@@ -89,12 +93,18 @@ export class PlanController {
 
   @Patch(':id/pause')
   pause(@Req() req: Request, @Param('id') id: string) {
-    return this.planService.pause({ userId: validateJwtPayload(req.user).sub, id });
+    return this.planService.pause({
+      userId: validateJwtPayload(req.user).sub,
+      id,
+    });
   }
 
   @Patch(':id/resume')
   resume(@Req() req: Request, @Param('id') id: string) {
-    return this.planService.resume({ userId: validateJwtPayload(req.user).sub, id });
+    return this.planService.resume({
+      userId: validateJwtPayload(req.user).sub,
+      id,
+    });
   }
 
   @Patch(':id/transition')
@@ -103,7 +113,11 @@ export class PlanController {
     @Param('id') id: string,
     @Body() body: { to: string },
   ) {
-    return this.planService.transition({ userId: validateJwtPayload(req.user).sub, id, to: body.to });
+    return this.planService.transition({
+      userId: validateJwtPayload(req.user).sub,
+      id,
+      to: body.to,
+    });
   }
 
   @Patch(':id/schedule/remove')
@@ -142,7 +156,13 @@ export class PlanProgressController {
   updateProgress(@Req() req: Request, @Body() body: unknown) {
     return this.updateProgressService.updateProgress({
       userId: validateJwtPayload(req.user).sub,
-      data: body as { statusChanges?: Array<{ taskId: string; newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE' }>; contextText?: string },
+      data: body as {
+        statusChanges?: Array<{
+          taskId: string;
+          newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE';
+        }>;
+        contextText?: string;
+      },
     });
   }
 }

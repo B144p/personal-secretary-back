@@ -35,23 +35,37 @@ export class CalendarScheduleService {
   async generateAndApplyTaskSchedule({ userId, id }: ITaskScheduleProps) {
     // Reject if another plan is already SCHEDULED
     const otherScheduled = await this.prisma.plan.findFirst({
-      where: { user_id: userId, status: EPlanStatus.SCHEDULED, id: { not: id } },
+      where: {
+        user_id: userId,
+        status: EPlanStatus.SCHEDULED,
+        id: { not: id },
+      },
     });
     if (otherScheduled) {
-      throw new AppException(AppErrorCode.ANOTHER_PLAN_SCHEDULED, 'Another plan is already scheduled');
+      throw new AppException(
+        AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+        'Another plan is already scheduled',
+      );
     }
 
     const plan = await this.getLeafTasks(id);
-    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    if (!plan)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
 
-    const userState = await this.prisma.userState.findUnique({ where: { user_id: userId } });
+    const userState = await this.prisma.userState.findUnique({
+      where: { user_id: userId },
+    });
     if (!userState) throw new Error('UserState not found');
 
     const range = {
       timeMin: dayjs().toISOString(),
       timeMax: dayjs().add(1, 'month').toISOString(),
     };
-    const calendarEvents = await getCalendarWithScope({ client: this.calendarService, userId, range });
+    const calendarEvents = await getCalendarWithScope({
+      client: this.calendarService,
+      userId,
+      range,
+    });
 
     const generatedSchedule = await generateLeafSchedule({
       client: this.openai,
@@ -80,7 +94,10 @@ export class CalendarScheduleService {
           },
         }),
       ),
-      this.prisma.plan.update({ where: { id }, data: { status: EPlanStatus.SCHEDULED } }),
+      this.prisma.plan.update({
+        where: { id },
+        data: { status: EPlanStatus.SCHEDULED },
+      }),
     ]);
 
     return {
@@ -94,7 +111,15 @@ export class CalendarScheduleService {
       where: { id: planId },
       include: {
         tasks: {
-          select: { id: true, title: true, status: true, estimated_minutes: true, sequence_order: true, depth: true, parent_task_id: true },
+          select: {
+            id: true,
+            title: true,
+            status: true,
+            estimated_minutes: true,
+            sequence_order: true,
+            depth: true,
+            parent_task_id: true,
+          },
           orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
         },
       },
@@ -102,8 +127,9 @@ export class CalendarScheduleService {
     if (!plan) return null;
 
     // Only schedule leaf tasks (no children)
-    const allTaskIds = new Set(plan.tasks.map((t) => t.id));
-    const parentIds = new Set(plan.tasks.map((t) => t.parent_task_id).filter(Boolean) as string[]);
+    const parentIds = new Set(
+      plan.tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
+    );
     const leaves = plan.tasks.filter((t) => !parentIds.has(t.id));
 
     return { id: plan.id, title: plan.title, tasks: leaves };
@@ -121,7 +147,10 @@ export class CalendarScheduleService {
 
     const scheduleMap = calendarEvents.results.reduce(
       (acc: Record<string, Set<string>>, { extendedProperties }) => {
-        if (!extendedProperties.private?.plan_id || !extendedProperties.private?.task_id)
+        if (
+          !extendedProperties.private?.plan_id ||
+          !extendedProperties.private?.task_id
+        )
           return acc;
 
         const { plan_id, task_id } = extendedProperties.private;
@@ -148,18 +177,25 @@ export class CalendarScheduleService {
 
 // ─── Calendar fetch ───────────────────────────────────────────────────────────
 
-const getCalendarWithScope = async ({ client, ...restProps }: IGetCalendarProps) => {
+const getCalendarWithScope = async ({
+  client,
+  ...restProps
+}: IGetCalendarProps) => {
   const { results } = await client.getCalendarRange(restProps);
-  const formatedData = results.map(({ extendedProperties, summary, start, end, description }) => ({
-    extendedProperties,
-    summary,
-    start,
-    end,
-    description,
-  }));
+  const formatedData = results.map(
+    ({ extendedProperties, summary, start, end, description }) => ({
+      extendedProperties,
+      summary,
+      start,
+      end,
+      description,
+    }),
+  );
   return { results: formatedData, count: formatedData.length };
 };
-type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & { client: CalendarService };
+type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & {
+  client: CalendarService;
+};
 
 // ─── AI scheduling ────────────────────────────────────────────────────────────
 
@@ -174,7 +210,11 @@ const generateLeafSchedule = async ({
     const mapped = tasks.map((task, index) => {
       const ref = `T${index + 1}`;
       refMap[ref] = task;
-      return { task_ref: ref, title: task.title, estimated_minutes: task.estimated_minutes };
+      return {
+        task_ref: ref,
+        title: task.title,
+        estimated_minutes: task.estimated_minutes,
+      };
     });
     return { mapped, refMap };
   };
@@ -183,7 +223,10 @@ const generateLeafSchedule = async ({
     refMap: ReturnType<typeof mapToRefs>['refMap'],
     schedule: IGenerateScheduleResponse['schedule'],
   ) => ({
-    schedule: schedule.map(({ task_ref, ...rest }) => ({ ...rest, ...refMap[task_ref] })),
+    schedule: schedule.map(({ task_ref, ...rest }) => ({
+      ...rest,
+      ...refMap[task_ref],
+    })),
   });
 
   const refMapData = mapToRefs(plan.tasks);
@@ -213,9 +256,17 @@ const generateLeafSchedule = async ({
         {
           role: 'user',
           content: [
-            { type: 'input_text' as const, text: `#TASKS: ${JSON.stringify({ tasks: refMapData.mapped })}` },
-            { type: 'input_text' as const, text: `#EXISTING SCHEDULE: ${JSON.stringify({ schedule: calendar.results })}` },
-            ...(correctionMsg ? [{ type: 'input_text' as const, text: correctionMsg }] : []),
+            {
+              type: 'input_text' as const,
+              text: `#TASKS: ${JSON.stringify({ tasks: refMapData.mapped })}`,
+            },
+            {
+              type: 'input_text' as const,
+              text: `#EXISTING SCHEDULE: ${JSON.stringify({ schedule: calendar.results })}`,
+            },
+            ...(correctionMsg
+              ? [{ type: 'input_text' as const, text: correctionMsg }]
+              : []),
           ],
         },
       ],
@@ -230,15 +281,28 @@ const generateLeafSchedule = async ({
     });
 
   let llmRes = await callAI();
-  let { schedule, ...restParsed } = validateOpenAIResponse(generateScheduleResponseSchema, llmRes.output_parsed);
-  let validationError = validateSchedule(schedule, refMapData.mapped, userState);
+  let { schedule, ...restParsed } = validateOpenAIResponse(
+    generateScheduleResponseSchema,
+    llmRes.output_parsed,
+  );
+  let validationError = validateSchedule(
+    schedule,
+    refMapData.mapped,
+    userState,
+  );
 
   if (validationError) {
     llmRes = await callAI(`VALIDATION ERROR — please fix: ${validationError}`);
-    ({ schedule, ...restParsed } = validateOpenAIResponse(generateScheduleResponseSchema, llmRes.output_parsed));
+    ({ schedule, ...restParsed } = validateOpenAIResponse(
+      generateScheduleResponseSchema,
+      llmRes.output_parsed,
+    ));
     validationError = validateSchedule(schedule, refMapData.mapped, userState);
     if (validationError) {
-      throw new AppException(AppErrorCode.SCHEDULING_INFEASIBLE, `Schedule validation failed after retry: ${validationError}`);
+      throw new AppException(
+        AppErrorCode.SCHEDULING_INFEASIBLE,
+        `Schedule validation failed after retry: ${validationError}`,
+      );
     }
   }
 
@@ -292,7 +356,9 @@ const validateSchedule = (
   }
 
   // Check overlaps
-  const sorted = [...schedule].sort((a, b) => dayjs(a.start).valueOf() - dayjs(b.start).valueOf());
+  const sorted = [...schedule].sort(
+    (a, b) => dayjs(a.start).valueOf() - dayjs(b.start).valueOf(),
+  );
   for (let i = 1; i < sorted.length; i++) {
     if (dayjs(sorted[i].start).isBefore(dayjs(sorted[i - 1].end))) {
       return `Tasks ${sorted[i - 1].task_ref} and ${sorted[i].task_ref} overlap`;
@@ -304,15 +370,25 @@ const validateSchedule = (
 
 interface IGenerateLeafSchedule {
   client: OpenAI;
-  plan: Exclude<Awaited<ReturnType<CalendarScheduleService['getLeafTasks']>>, null>;
+  plan: Exclude<
+    Awaited<ReturnType<CalendarScheduleService['getLeafTasks']>>,
+    null
+  >;
   calendar: Awaited<ReturnType<typeof getCalendarWithScope>>;
   userState: UserState;
 }
 
 // ─── Apply schedule ────────────────────────────────────────────────────────────
 
-const applySchedule = async ({ userId, planId, client, data }: IScheduleEventToCalendar) => {
-  const { outputFormat: { schedule } } = data;
+const applySchedule = async ({
+  userId,
+  planId,
+  client,
+  data,
+}: IScheduleEventToCalendar) => {
+  const {
+    outputFormat: { schedule },
+  } = data;
 
   const results = await Promise.all(
     schedule.map((record) =>
@@ -325,7 +401,7 @@ const applySchedule = async ({ userId, planId, client, data }: IScheduleEventToC
   );
 
   const taskEvents = results.map((googleEventId, i) => ({
-    taskId: schedule[i].id as string,
+    taskId: schedule[i].id,
     googleEventId,
     start: schedule[i].start,
     end: schedule[i].end,
@@ -341,8 +417,13 @@ interface IScheduleEventToCalendar {
   data: Awaited<ReturnType<typeof generateLeafSchedule>>;
 }
 
-const insertCalendarEvent = async ({ userId, planId, client, event }: IInsertCalendarEvent): Promise<string> => {
-  const privateProperties = { plan_id: planId, task_id: event.id as string };
+const insertCalendarEvent = async ({
+  userId,
+  planId,
+  client,
+  event,
+}: IInsertCalendarEvent): Promise<string> => {
+  const privateProperties = { plan_id: planId, task_id: event.id };
 
   const createdCalendarEvent = await client.insertEvent({
     userId,
@@ -359,10 +440,12 @@ const insertCalendarEvent = async ({ userId, planId, client, event }: IInsertCal
     },
   });
 
-  if (!createdCalendarEvent.id) throw new Error('Google Calendar did not return event id');
+  if (!createdCalendarEvent.id)
+    throw new Error('Google Calendar did not return event id');
   return createdCalendarEvent.id;
 };
 
-interface IInsertCalendarEvent extends Pick<IScheduleEventToCalendar, 'userId' | 'planId' | 'client'> {
+interface IInsertCalendarEvent
+  extends Pick<IScheduleEventToCalendar, 'userId' | 'planId' | 'client'> {
   event: IScheduleEventToCalendar['data']['outputFormat']['schedule'][number];
 }

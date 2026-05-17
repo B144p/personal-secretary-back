@@ -9,7 +9,11 @@ import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { z } from 'zod';
-import { generatePlanResponseSchema, IGeneratePlanResponse, ITaskNode } from '../schemas';
+import {
+  generatePlanResponseSchema,
+  IGeneratePlanResponse,
+  ITaskNode,
+} from '../schemas';
 import type {
   IGeneratePlanProps,
   IGenerateTaskProps,
@@ -31,11 +35,20 @@ export class GeneratePlanService {
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
     const generatedPlan = await generateTask({ client: this.openai, prompt });
     const user = await this.userService.getProfile(userId);
-    const createdPlan = await upsertPlan({ user, client: this.prisma, plan: generatedPlan.output });
+    const createdPlan = await upsertPlan({
+      user,
+      client: this.prisma,
+      plan: generatedPlan.output,
+    });
     return createdPlan;
   }
 
-  async reGeneratePlan({ userId, preservedTasks, parentTaskId, data }: IReGeneratePlanProps) {
+  async reGeneratePlan({
+    userId: _userId,
+    preservedTasks,
+    parentTaskId,
+    data,
+  }: IReGeneratePlanProps) {
     const plan = await this.prisma.plan.findUnique({ where: { id: data.id } });
     const planTitle = plan?.title ?? '';
 
@@ -55,7 +68,9 @@ export class GeneratePlanService {
       planId: data.id,
       tasks: reGeneratedPlan.output.tasks,
       parentId: parentTaskId,
-      depth: parentTaskId ? await getDepthForParent(this.prisma, parentTaskId) : 0,
+      depth: parentTaskId
+        ? await getDepthForParent(this.prisma, parentTaskId)
+        : 0,
     });
 
     return this.prisma.plan.findUnique({
@@ -65,7 +80,13 @@ export class GeneratePlanService {
     });
   }
 
-  async removeRelatedCalendarEvent({ userId, planId }: { userId: string; planId: string }) {
+  async removeRelatedCalendarEvent({
+    userId,
+    planId,
+  }: {
+    userId: string;
+    planId: string;
+  }) {
     const calendarClient = await this.calendarService.getClient(userId);
     return await removeRelatedCalendarEvent({
       client: calendarClient,
@@ -77,7 +98,10 @@ export class GeneratePlanService {
 
 // ─── AI call ────────────────────────────────────────────────────────────────
 
-const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTaskProps) => {
+const generateTask = async ({
+  client,
+  prompt: { goal, more_info },
+}: IGenerateTaskProps) => {
   const call = () =>
     client.responses.parse({
       model: getModelForTask(AiTask.PLAN_GENERATION),
@@ -92,8 +116,14 @@ const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTa
         {
           role: 'user',
           content: [
-            { type: 'input_text' as const, text: `Generate task plan for: ${goal}` },
-            { type: 'input_text' as const, text: more_info ? `More info: ${more_info}` : '' },
+            {
+              type: 'input_text' as const,
+              text: `Generate task plan for: ${goal}`,
+            },
+            {
+              type: 'input_text' as const,
+              text: more_info ? `More info: ${more_info}` : '',
+            },
           ],
         },
       ],
@@ -108,7 +138,10 @@ const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTa
     });
 
   let llmRes = await call();
-  let outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
+  let outputParsed = validateOpenAIResponse(
+    generatePlanResponseSchema,
+    llmRes.output_parsed,
+  );
 
   if (exceedsMaxDepth(outputParsed.tasks, 0)) {
     llmRes = await client.responses.parse({
@@ -124,8 +157,14 @@ const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTa
         {
           role: 'user',
           content: [
-            { type: 'input_text' as const, text: `Generate task plan for: ${goal}` },
-            { type: 'input_text' as const, text: more_info ? `More info: ${more_info}` : '' },
+            {
+              type: 'input_text' as const,
+              text: `Generate task plan for: ${goal}`,
+            },
+            {
+              type: 'input_text' as const,
+              text: more_info ? `More info: ${more_info}` : '',
+            },
           ],
         },
         {
@@ -151,10 +190,16 @@ const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTa
         },
       },
     });
-    outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
+    outputParsed = validateOpenAIResponse(
+      generatePlanResponseSchema,
+      llmRes.output_parsed,
+    );
 
     if (exceedsMaxDepth(outputParsed.tasks, 0)) {
-      throw new AppException(AppErrorCode.AI_GENERATION_FAILED, 'Generated task tree exceeds maximum depth of 4 after retry');
+      throw new AppException(
+        AppErrorCode.AI_GENERATION_FAILED,
+        'Generated task tree exceeds maximum depth of 4 after retry',
+      );
     }
   }
 
@@ -163,7 +208,10 @@ const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTa
 
 const exceedsMaxDepth = (tasks: ITaskNode[], currentDepth: number): boolean => {
   if (currentDepth > 4) return true;
-  return tasks.some((t) => t.children.length > 0 && exceedsMaxDepth(t.children, currentDepth + 1));
+  return tasks.some(
+    (t) =>
+      t.children.length > 0 && exceedsMaxDepth(t.children, currentDepth + 1),
+  );
 };
 
 // ─── DB persist ─────────────────────────────────────────────────────────────
@@ -176,7 +224,11 @@ const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
   return await createPlan({ user, client, plan });
 };
 
-const createPlan = async ({ user, client, plan }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
+const createPlan = async ({
+  user,
+  client,
+  plan,
+}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
   const created = await client.plan.create({
     data: {
       user_id: user.id,
@@ -187,7 +239,13 @@ const createPlan = async ({ user, client, plan }: Pick<IUpsertPlanProps, 'user' 
     omit: { user_id: true },
   });
 
-  await insertTaskTree({ client, planId: created.id, tasks: plan.tasks, parentId: null, depth: 0 });
+  await insertTaskTree({
+    client,
+    planId: created.id,
+    tasks: plan.tasks,
+    parentId: null,
+    depth: 0,
+  });
 
   return client.plan.findUnique({
     where: { id: created.id },
@@ -196,7 +254,12 @@ const createPlan = async ({ user, client, plan }: Pick<IUpsertPlanProps, 'user' 
   });
 };
 
-const updatePlan = async ({ user, client, plan, planId }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
+const updatePlan = async ({
+  user,
+  client,
+  plan,
+  planId,
+}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
   await client.plan.update({
     where: { id: planId, user_id: user.id },
     data: {
@@ -206,7 +269,13 @@ const updatePlan = async ({ user, client, plan, planId }: Pick<IUpsertPlanProps,
     },
   });
 
-  await insertTaskTree({ client, planId: planId as string, tasks: plan.tasks, parentId: null, depth: 0 });
+  await insertTaskTree({
+    client,
+    planId: planId as string,
+    tasks: plan.tasks,
+    parentId: null,
+    depth: 0,
+  });
 
   return client.plan.findUnique({
     where: { id: planId as string },
@@ -244,7 +313,13 @@ const insertTaskTree = async ({
     });
 
     if (task.children.length > 0) {
-      await insertTaskTree({ client, planId, tasks: task.children, parentId: created.id, depth: depth + 1 });
+      await insertTaskTree({
+        client,
+        planId,
+        tasks: task.children,
+        parentId: created.id,
+        depth: depth + 1,
+      });
     }
   }
 };
@@ -269,7 +344,10 @@ const reGenerateTask = async ({
         role: 'user',
         content: [
           { type: 'input_text' as const, text: `Plan: ${planTitle}` },
-          { type: 'input_text' as const, text: `Reason for regeneration: ${reason}` },
+          {
+            type: 'input_text' as const,
+            text: `Reason for regeneration: ${reason}`,
+          },
           {
             type: 'input_text' as const,
             text:
@@ -277,7 +355,10 @@ const reGenerateTask = async ({
                 ? `Preserved tasks (already IN_PROGRESS or DONE — do not touch): ${JSON.stringify(preservedTasks)}`
                 : 'No preserved tasks.',
           },
-          { type: 'input_text' as const, text: feedback ? `Additional feedback: ${feedback}` : '' },
+          {
+            type: 'input_text' as const,
+            text: feedback ? `Additional feedback: ${feedback}` : '',
+          },
         ],
       },
     ],
@@ -291,12 +372,18 @@ const reGenerateTask = async ({
     },
   });
 
-  const outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
+  const outputParsed = validateOpenAIResponse(
+    generatePlanResponseSchema,
+    llmRes.output_parsed,
+  );
   return { usage: llmRes.usage, output: outputParsed as IGeneratePlanResponse };
 };
 
 const getDepthForParent = async (client: PrismaService, parentId: string) => {
-  const parent = await client.task.findUnique({ where: { id: parentId }, select: { depth: true } });
+  const parent = await client.task.findUnique({
+    where: { id: parentId },
+    select: { depth: true },
+  });
   return (parent?.depth ?? 0) + 1;
 };
 

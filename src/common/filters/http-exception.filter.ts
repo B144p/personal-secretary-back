@@ -26,7 +26,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
         message:
           typeof body === 'string'
             ? body
-            : ((body as Record<string, unknown>).message ?? 'An error occurred'),
+            : ((body as Record<string, unknown>).message ??
+              'An error occurred'),
         details: {},
       });
     }

@@ -56,6 +56,8 @@ export class GoogleAuthController {
   // TODO: Remove on production
   @Post('delete')
   deleteUser(@Req() req: Request & { body: { refresh_token: string } }) {
-    return this.googleAuthService.userDelete(req.body.refresh_token);
+    return this.googleAuthService.userDelete(
+      (req.body as { refresh_token: string }).refresh_token,
+    );
   }
 }

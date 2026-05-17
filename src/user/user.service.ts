@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
-import { UpdateSettingsDto, updateSettingsSchema } from './dto/update-settings.dto';
+import {
+  UpdateSettingsDto,
+  updateSettingsSchema,
+} from './dto/update-settings.dto';
 
 @Injectable()
 export class UserService {
@@ -33,10 +36,16 @@ export class UserService {
     if (!parsed.success) {
       const field = parsed.error.issues[0]?.path[0];
       if (field === 'working_hours_start' || field === 'working_hours_end') {
-        throw new AppException(AppErrorCode.INVALID_HOURS, parsed.error.issues[0].message);
+        throw new AppException(
+          AppErrorCode.INVALID_HOURS,
+          parsed.error.issues[0].message,
+        );
       }
       if (field === 'time_zone') {
-        throw new AppException(AppErrorCode.INVALID_TIMEZONE, parsed.error.issues[0].message);
+        throw new AppException(
+          AppErrorCode.INVALID_TIMEZONE,
+          parsed.error.issues[0].message,
+        );
       }
       throw new BadRequestException(parsed.error.message);
     }
@@ -45,14 +54,20 @@ export class UserService {
 
     if (dto.working_hours_start && dto.working_hours_end) {
       if (dto.working_hours_end <= dto.working_hours_start) {
-        throw new AppException(AppErrorCode.INVALID_HOURS, 'working_hours_end must be after working_hours_start');
+        throw new AppException(
+          AppErrorCode.INVALID_HOURS,
+          'working_hours_end must be after working_hours_start',
+        );
       }
     } else {
       const current = await this.getSettings(userId);
       const start = dto.working_hours_start ?? current.working_hours_start;
       const end = dto.working_hours_end ?? current.working_hours_end;
       if (end <= start) {
-        throw new AppException(AppErrorCode.INVALID_HOURS, 'working_hours_end must be after working_hours_start');
+        throw new AppException(
+          AppErrorCode.INVALID_HOURS,
+          'working_hours_end must be after working_hours_start',
+        );
       }
     }
 

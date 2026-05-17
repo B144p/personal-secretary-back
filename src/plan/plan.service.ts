@@ -5,12 +5,7 @@ import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
-import {
-  IGetDetailProps,
-  IGetListProps,
-  IRemovePlanProps,
-  IUpdatePlanStatus,
-} from './interfaces';
+import { IGetDetailProps, IGetListProps, IRemovePlanProps } from './interfaces';
 import { GeneratePlanService } from './plan.generate';
 
 @Injectable()
@@ -93,7 +88,10 @@ export class PlanService {
     const { userId, data: dto } = data;
 
     if (!dto.reason || dto.reason.length < 10) {
-      throw new AppException(AppErrorCode.REASON_REQUIRED, 'reason must be at least 10 characters');
+      throw new AppException(
+        AppErrorCode.REASON_REQUIRED,
+        'reason must be at least 10 characters',
+      );
     }
 
     const plan = await this.prisma.plan.findUnique({
@@ -108,8 +106,13 @@ export class PlanService {
 
     // Classify tasks in scope
     const subtree = plan.tasks.filter((t) => subtaskIds.has(t.id));
-    const pendingIds = subtree.filter((t) => t.status === ETaskStatus.PENDING).map((t) => t.id);
-    const preserved = subtree.filter((t) => t.status === ETaskStatus.IN_PROGRESS || t.status === ETaskStatus.DONE);
+    const pendingIds = subtree
+      .filter((t) => t.status === ETaskStatus.PENDING)
+      .map((t) => t.id);
+    const preserved = subtree.filter(
+      (t) =>
+        t.status === ETaskStatus.IN_PROGRESS || t.status === ETaskStatus.DONE,
+    );
 
     // If plan is SCHEDULED: delete calendar events for pending tasks being pruned
     if (plan.status === EPlanStatus.SCHEDULED && pendingIds.length > 0) {
@@ -150,35 +153,40 @@ export class PlanService {
       typeof this.calendarScheduleService.generateAndApplyTaskSchedule
     >[0],
   ) {
-    const scheduleRes =
-      await this.calendarScheduleService.generateAndApplyTaskSchedule(data);
-
-    await updatePlanStatus({
-      id: data.id,
-      status: EPlanStatus.SCHEDULED,
-      client: this.prisma,
-    });
-
-    return scheduleRes;
+    return this.calendarScheduleService.generateAndApplyTaskSchedule(data);
   }
 
   async pause({ userId, id }: { userId: string; id: string }) {
     const plan = await this.prisma.plan.findUnique({
       where: { id, user_id: userId },
-      include: { tasks: { include: { events: { where: { is_active: true } } } } },
+      include: {
+        tasks: { include: { events: { where: { is_active: true } } } },
+      },
     });
-    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    if (!plan)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
     if (plan.is_paused) return { message: 'Plan is already paused' };
 
     // If SCHEDULED: remove active Google events for incomplete leaves, deactivate TaskEvents
     if (plan.status === EPlanStatus.SCHEDULED) {
-      const incompleteTasks = plan.tasks.filter((t) => t.status !== ETaskStatus.DONE);
-      const activeEventIds = incompleteTasks.flatMap((t) => t.events.map((e) => e.google_event_id));
+      const incompleteTasks = plan.tasks.filter(
+        (t) => t.status !== ETaskStatus.DONE,
+      );
+      const activeEventIds = incompleteTasks.flatMap((t) =>
+        t.events.map((e) => e.google_event_id),
+      );
       if (activeEventIds.length > 0) {
         const calClient = await this.calendarService.getClient(userId);
-        await this.calendarService.removeEvents({ client: calClient, calendarId: 'primary', events: activeEventIds });
+        await this.calendarService.removeEvents({
+          client: calClient,
+          calendarId: 'primary',
+          events: activeEventIds,
+        });
         await this.prisma.taskEvent.updateMany({
-          where: { task_id: { in: incompleteTasks.map((t) => t.id) }, is_active: true },
+          where: {
+            task_id: { in: incompleteTasks.map((t) => t.id) },
+            is_active: true,
+          },
           data: { is_active: false },
         });
       }
@@ -189,44 +197,73 @@ export class PlanService {
   }
 
   async resume({ userId, id }: { userId: string; id: string }) {
-    const plan = await this.prisma.plan.findUnique({ where: { id, user_id: userId } });
-    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    const plan = await this.prisma.plan.findUnique({
+      where: { id, user_id: userId },
+    });
+    if (!plan)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
     if (!plan.is_paused) return { message: 'Plan is not paused' };
 
-    await this.prisma.plan.update({ where: { id }, data: { is_paused: false } });
+    await this.prisma.plan.update({
+      where: { id },
+      data: { is_paused: false },
+    });
 
     // If was SCHEDULED: re-run scheduling for incomplete leaves
     if (plan.status === EPlanStatus.SCHEDULED) {
       try {
-        await this.calendarScheduleService.generateAndApplyTaskSchedule({ userId, id });
+        await this.calendarScheduleService.generateAndApplyTaskSchedule({
+          userId,
+          id,
+        });
       } catch {
         // Return partial success — plan is unpaused even if scheduling fails
-        return { message: 'Plan resumed; scheduling could not be restarted automatically' };
+        return {
+          message:
+            'Plan resumed; scheduling could not be restarted automatically',
+        };
       }
     }
 
     return { message: 'Plan resumed' };
   }
 
-  async transition({ userId, id, to }: { userId: string; id: string; to: string }) {
+  async transition({
+    userId,
+    id,
+    to,
+  }: {
+    userId: string;
+    id: string;
+    to: string;
+  }) {
     const allowed = ['READY', 'DRAFT', 'DONE'];
     if (!allowed.includes(to)) {
-      throw new AppException(AppErrorCode.INVALID_TRANSITION, `Target status ${to} is not allowed`);
+      throw new AppException(
+        AppErrorCode.INVALID_TRANSITION,
+        `Target status ${to} is not allowed`,
+      );
     }
 
     const plan = await this.prisma.plan.findUnique({
       where: { id, user_id: userId },
       include: { tasks: true },
     });
-    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    if (!plan)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
 
     const current = plan.status;
 
     if (to === 'DONE') {
       const leafIds = getLeafIds(plan.tasks);
-      const allDone = plan.tasks.filter((t) => leafIds.has(t.id)).every((t) => t.status === ETaskStatus.DONE);
+      const allDone = plan.tasks
+        .filter((t) => leafIds.has(t.id))
+        .every((t) => t.status === ETaskStatus.DONE);
       if (!allDone) {
-        throw new AppException(AppErrorCode.INVALID_TRANSITION, 'All leaf tasks must be DONE before marking plan DONE');
+        throw new AppException(
+          AppErrorCode.INVALID_TRANSITION,
+          'All leaf tasks must be DONE before marking plan DONE',
+        );
       }
     }
 
@@ -239,27 +276,44 @@ export class PlanService {
     };
 
     if (!validTransitions[current]?.includes(to)) {
-      throw new AppException(AppErrorCode.INVALID_TRANSITION, `Cannot transition from ${current} to ${to}`);
+      throw new AppException(
+        AppErrorCode.INVALID_TRANSITION,
+        `Cannot transition from ${current} to ${to}`,
+      );
     }
 
-    await this.prisma.plan.update({ where: { id }, data: { status: to as EPlanStatus } });
+    await this.prisma.plan.update({
+      where: { id },
+      data: { status: to as EPlanStatus },
+    });
     return { message: `Plan transitioned to ${to}` };
   }
 
   async remove({ id, userId }: IRemovePlanProps) {
     const plan = await this.prisma.plan.findUnique({
       where: { id, user_id: userId },
-      include: { tasks: { include: { events: { where: { is_active: true } } } } },
+      include: {
+        tasks: { include: { events: { where: { is_active: true } } } },
+      },
     });
-    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    if (!plan)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
 
     // Delete active Calendar events for incomplete leaves
     if (plan.status === EPlanStatus.SCHEDULED) {
-      const incompleteTasks = plan.tasks.filter((t) => t.status !== ETaskStatus.DONE);
-      const activeEventIds = incompleteTasks.flatMap((t) => t.events.map((e) => e.google_event_id));
+      const incompleteTasks = plan.tasks.filter(
+        (t) => t.status !== ETaskStatus.DONE,
+      );
+      const activeEventIds = incompleteTasks.flatMap((t) =>
+        t.events.map((e) => e.google_event_id),
+      );
       if (activeEventIds.length > 0) {
         const calClient = await this.calendarService.getClient(userId);
-        await this.calendarService.removeEvents({ client: calClient, calendarId: 'primary', events: activeEventIds });
+        await this.calendarService.removeEvents({
+          client: calClient,
+          calendarId: 'primary',
+          events: activeEventIds,
+        });
       }
     }
 
@@ -281,16 +335,26 @@ export class PlanService {
     const { updateTaskSchema } = await import('./dto/update-task.dto');
     const parsed = updateTaskSchema.safeParse(body);
     if (!parsed.success) {
-      throw new AppException(AppErrorCode.INVALID_GOAL, parsed.error.issues[0]?.message ?? 'Invalid body');
+      throw new AppException(
+        AppErrorCode.INVALID_GOAL,
+        parsed.error.issues[0]?.message ?? 'Invalid body',
+      );
     }
 
-    const plan = await this.prisma.plan.findUnique({ where: { id: planId, user_id: userId } });
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: planId, user_id: userId },
+    });
     if (!plan) throw new NotFoundException('Plan not found');
     if (plan.status !== EPlanStatus.DRAFT) {
-      throw new AppException(AppErrorCode.PLAN_NOT_EDITABLE, 'Only DRAFT plans can be edited');
+      throw new AppException(
+        AppErrorCode.PLAN_NOT_EDITABLE,
+        'Only DRAFT plans can be edited',
+      );
     }
 
-    const task = await this.prisma.task.findUnique({ where: { id: taskId, plan_id: planId } });
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId, plan_id: planId },
+    });
     if (!task) throw new NotFoundException('Task not found');
 
     return this.prisma.task.update({
@@ -308,31 +372,43 @@ export class PlanService {
   }
 }
 
-const updatePlanStatus = async ({ id, status, client }: IUpdatePlanStatus) => {
-  await client.plan.update({
-    where: { id },
-    data: { status },
-  });
-  return `Trigger ${status} on #${id} plan success.`;
-};
-
 const getLeafIds = (tasks: { id: string; parent_task_id: string | null }[]) => {
-  const parentSet = new Set(tasks.map((t) => t.parent_task_id).filter(Boolean) as string[]);
+  const parentSet = new Set(
+    tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
+  );
   return new Set(tasks.filter((t) => !parentSet.has(t.id)).map((t) => t.id));
 };
 
-const collectSubtreeIds = (tasks: Task[], rootId: string | null): Set<string> => {
+const collectSubtreeIds = (
+  tasks: Task[],
+  rootId: string | null,
+): Set<string> => {
   const ids = new Set<string>();
-  const queue = rootId ? [rootId] : tasks.filter((t) => t.parent_task_id === null).map((t) => t.id);
+  const queue = rootId
+    ? [rootId]
+    : tasks.filter((t) => t.parent_task_id === null).map((t) => t.id);
   for (const id of queue) {
     ids.add(id);
-    tasks.filter((t) => t.parent_task_id === id).forEach((t) => queue.push(t.id));
+    tasks
+      .filter((t) => t.parent_task_id === id)
+      .forEach((t) => queue.push(t.id));
   }
   return ids;
 };
 
-const buildTaskTree = (tasks: Task[], parentId: string | null): ReturnType<typeof import('./schemas').generatePlanResponseSchema.shape.tasks.element.parse>[] => {
-  return tasks
+type SimpleTaskNode = {
+  title: string;
+  description: string;
+  sequence_order: number;
+  estimated_minutes: number | null;
+  children: SimpleTaskNode[];
+};
+
+const buildTaskTree = (
+  tasks: Task[],
+  parentId: string | null,
+): SimpleTaskNode[] =>
+  tasks
     .filter((t) => t.parent_task_id === parentId)
     .sort((a, b) => a.sequence_order - b.sequence_order)
     .map((t) => ({
@@ -340,6 +416,5 @@ const buildTaskTree = (tasks: Task[], parentId: string | null): ReturnType<typeo
       description: t.description ?? '',
       sequence_order: t.sequence_order,
       estimated_minutes: t.estimated_minutes,
-      children: buildTaskTree(tasks, t.id) as any,
+      children: buildTaskTree(tasks, t.id),
     }));
-};
