@@ -48,6 +48,7 @@ model Plan {
   source_type EPlanSourceType?
   status      EPlanStatus
   is_paused   Boolean          @default(false)
+  paused_at   DateTime?
 
   create_at DateTime @default(now())
   update_at DateTime @updatedAt

@@ -192,7 +192,7 @@ export class PlanService {
       }
     }
 
-    await this.prisma.plan.update({ where: { id }, data: { is_paused: true } });
+    await this.prisma.plan.update({ where: { id }, data: { is_paused: true, paused_at: new Date() } });
     return { message: 'Plan paused' };
   }
 
@@ -206,7 +206,7 @@ export class PlanService {
 
     await this.prisma.plan.update({
       where: { id },
-      data: { is_paused: false },
+      data: { is_paused: false, paused_at: null },
     });
 
     // If was SCHEDULED: re-run scheduling for incomplete leaves
