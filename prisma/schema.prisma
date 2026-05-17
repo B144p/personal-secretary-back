@@ -28,7 +28,12 @@ model UserState {
   id      String @id @default(cuid())
   user_id String @unique
 
-  last_calendar_sync DateTime?
+  working_hours_start String    @default("10:00")
+  working_hours_end   String    @default("20:00")
+  days_off            Int[]     @default([0])
+  time_zone           String    @default("Asia/Bangkok")
+  special_days        Json      @default("[]")
+  last_calendar_sync  DateTime?
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
