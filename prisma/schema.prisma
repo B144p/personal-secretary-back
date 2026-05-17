@@ -109,6 +109,8 @@ model TaskEvent {
   @@map("task_event")
 }
 
+/// DEPRECATED — CategoryRule models are kept for data migration only.
+/// The /task/* routes that use these are gated behind DevOnlyGuard (NODE_ENV !== production).
 model CategoryRule {
   id       String         @id @default(uuid())
   keyword  String         @unique
@@ -121,6 +123,7 @@ model CategoryRule {
   @@map("category_rule")
 }
 
+/// DEPRECATED
 model CategoryRuleTag {
   id  String @id @default(uuid())
   tag String @unique
@@ -132,6 +135,7 @@ model CategoryRuleTag {
   @@map("category_rule_tag")
 }
 
+/// DEPRECATED
 model CategoryRuleKeywordTag {
   tag_id           String
   category_rule_id String
