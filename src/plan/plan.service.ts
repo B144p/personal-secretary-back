@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { EPlanStatus, ETaskStatus, Task } from '@prisma/client';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { IHoldPlanProps } from 'src/calendar/interfaces';
+import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
@@ -187,6 +188,38 @@ export class PlanService {
       },
     });
     return `Remove plan success.`;
+  }
+
+  async updateTask({
+    userId,
+    planId,
+    taskId,
+    body,
+  }: {
+    userId: string;
+    planId: string;
+    taskId: string;
+    body: unknown;
+  }) {
+    const { updateTaskSchema } = await import('./dto/update-task.dto');
+    const parsed = updateTaskSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AppException(AppErrorCode.INVALID_GOAL, parsed.error.issues[0]?.message ?? 'Invalid body');
+    }
+
+    const plan = await this.prisma.plan.findUnique({ where: { id: planId, user_id: userId } });
+    if (!plan) throw new NotFoundException('Plan not found');
+    if (plan.status !== EPlanStatus.DRAFT) {
+      throw new AppException(AppErrorCode.PLAN_NOT_EDITABLE, 'Only DRAFT plans can be edited');
+    }
+
+    const task = await this.prisma.task.findUnique({ where: { id: taskId, plan_id: planId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    return this.prisma.task.update({
+      where: { id: taskId },
+      data: parsed.data,
+    });
   }
 
   async removeRelatedCalendarEvent(

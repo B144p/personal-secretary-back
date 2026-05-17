@@ -63,6 +63,21 @@ export class PlanController {
     });
   }
 
+  @Patch(':planId/tasks/:taskId')
+  updateTask(
+    @Req() req: Request,
+    @Param('planId') planId: string,
+    @Param('taskId') taskId: string,
+    @Body() body: unknown,
+  ) {
+    return this.planService.updateTask({
+      userId: validateJwtPayload(req.user).sub,
+      planId,
+      taskId,
+      body,
+    });
+  }
+
   @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @Post(':id/re_generate')
   reGenerate(
