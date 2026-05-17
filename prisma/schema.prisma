@@ -13,7 +13,7 @@ model User {
   google_id     String   @unique
   email         String   @unique
   name          String?
-  avartar_url   String?
+  avatar_url    String?
   refresh_token String
   create_at     DateTime @default(now())
   update_at     DateTime @updatedAt
@@ -42,6 +42,7 @@ model Plan {
   source_id   String?
   source_type EPlanSourceType?
   status      EPlanStatus
+  is_paused   Boolean          @default(false)
 
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
@@ -53,15 +54,22 @@ model Plan {
 }
 
 model Task {
-  id      String      @id @default(uuid())
-  plan_id String
-  title   String
-  status  ETaskStatus @default(HOLD)
+  id               String      @id @default(uuid())
+  plan_id          String
+  parent_task_id   String?
+  title            String
+  description      String?
+  status           ETaskStatus @default(PENDING)
+  depth            Int         @default(0)
+  sequence_order   Int         @default(0)
+  estimated_minutes Int?
 
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
 
-  plan Plan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+  plan     Plan   @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+  parent   Task?  @relation("TaskTree", fields: [parent_task_id], references: [id])
+  children Task[] @relation("TaskTree")
 
   @@map("task")
 }
@@ -122,11 +130,12 @@ enum EPlanStatus {
   READY
   SCHEDULED
   HOLD
+  DONE
 }
 
 enum ETaskStatus {
   HOLD
   PENDING
-  INPROGRESS
+  IN_PROGRESS
   DONE
 }
