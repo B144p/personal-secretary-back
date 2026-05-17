@@ -16,7 +16,6 @@ import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { GeneratePlanDto } from './dto/generate-plan.dto';
 import { ReGeneratePlanDto } from './dto/re-generate-plan.dto';
-import { IPlanActionMode } from './interfaces';
 import { PlanService } from './plan.service';
 import { UpdateProgressService } from './update.progress';
 
@@ -34,17 +33,6 @@ export class PlanController {
     return await this.planService.generate({
       userId: validateJwtPayload(req.user).sub,
       prompt: generatePlanDto,
-    });
-  }
-
-  @Patch(':id/schedule/remove')
-  async removeRelatedCalendarEvent(
-    @Req() req: Request,
-    @Param('id') id: string,
-  ) {
-    return await this.planService.removeRelatedCalendarEvent({
-      userId: validateJwtPayload(req.user).sub,
-      planId: id,
     });
   }
 
@@ -87,10 +75,7 @@ export class PlanController {
   ) {
     return this.planService.reGenerate({
       userId: validateJwtPayload(req.user).sub,
-      data: {
-        ...reGeneratePlanDto,
-        id,
-      },
+      data: { ...reGeneratePlanDto, id },
     });
   }
 
@@ -102,16 +87,33 @@ export class PlanController {
     });
   }
 
-  @Patch(':id/:mode')
-  planAction(
+  @Patch(':id/pause')
+  pause(@Req() req: Request, @Param('id') id: string) {
+    return this.planService.pause({ userId: validateJwtPayload(req.user).sub, id });
+  }
+
+  @Patch(':id/resume')
+  resume(@Req() req: Request, @Param('id') id: string) {
+    return this.planService.resume({ userId: validateJwtPayload(req.user).sub, id });
+  }
+
+  @Patch(':id/transition')
+  transition(
     @Req() req: Request,
     @Param('id') id: string,
-    @Param('mode') mode: IPlanActionMode,
+    @Body() body: { to: string },
   ) {
-    return this.planService.planAction({
-      id,
-      mode,
+    return this.planService.transition({ userId: validateJwtPayload(req.user).sub, id, to: body.to });
+  }
+
+  @Patch(':id/schedule/remove')
+  async removeRelatedCalendarEvent(
+    @Req() req: Request,
+    @Param('id') id: string,
+  ) {
+    return await this.planService.removeRelatedCalendarEvent({
       userId: validateJwtPayload(req.user).sub,
+      planId: id,
     });
   }
 

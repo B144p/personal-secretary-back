@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { EPlanStatus, ETaskStatus, Task } from '@prisma/client';
 import { CalendarService } from 'src/calendar/calendar.service';
-import { IHoldPlanProps } from 'src/calendar/interfaces';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -9,7 +8,6 @@ import { CalendarScheduleService } from './calendar.schedule';
 import {
   IGetDetailProps,
   IGetListProps,
-  IPlanActionProps,
   IRemovePlanProps,
   IUpdatePlanStatus,
 } from './interfaces';
@@ -164,73 +162,109 @@ export class PlanService {
     return scheduleRes;
   }
 
-  // TODO: Refactor for reduce complexity
-  async planAction({ userId, id, mode }: IPlanActionProps) {
-    const plan = await this.getDetail({
-      id,
-      userId,
+  async pause({ userId, id }: { userId: string; id: string }) {
+    const plan = await this.prisma.plan.findUnique({
+      where: { id, user_id: userId },
+      include: { tasks: { include: { events: { where: { is_active: true } } } } },
     });
-    if (typeof plan === 'string') return plan;
+    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    if (plan.is_paused) return { message: 'Plan is already paused' };
 
-    const approveAction = async () => {
-      switch (plan.status) {
-        case EPlanStatus.DRAFT:
-          return await updatePlanStatus({
-            id,
-            status: EPlanStatus.READY,
-            client: this.prisma,
-          });
-        case EPlanStatus.HOLD:
-        case EPlanStatus.READY:
-        case EPlanStatus.SCHEDULED:
-          return 'Your plan is already approved.';
-        default:
-          throw new Error('Status is out of scope.');
+    // If SCHEDULED: remove active Google events for incomplete leaves, deactivate TaskEvents
+    if (plan.status === EPlanStatus.SCHEDULED) {
+      const incompleteTasks = plan.tasks.filter((t) => t.status !== ETaskStatus.DONE);
+      const activeEventIds = incompleteTasks.flatMap((t) => t.events.map((e) => e.google_event_id));
+      if (activeEventIds.length > 0) {
+        const calClient = await this.calendarService.getClient(userId);
+        await this.calendarService.removeEvents({ client: calClient, calendarId: 'primary', events: activeEventIds });
+        await this.prisma.taskEvent.updateMany({
+          where: { task_id: { in: incompleteTasks.map((t) => t.id) }, is_active: true },
+          data: { is_active: false },
+        });
       }
-    };
-
-    const pauseAction = async () => {
-      switch (plan.status) {
-        case EPlanStatus.DRAFT:
-          return 'Your plan still in phase draft.';
-        case EPlanStatus.HOLD:
-        case EPlanStatus.READY:
-        case EPlanStatus.SCHEDULED:
-          return await holdPlan({
-            id,
-            userId,
-            client: this.prisma,
-            calendar: this.calendarService,
-          });
-        default:
-          throw new Error('Status is out of scope.');
-      }
-    };
-
-    switch (mode) {
-      case 'pause':
-        return await pauseAction();
-      case 'approve':
-        return await approveAction();
-      default:
-        return 'Action mode out of scope!';
     }
+
+    await this.prisma.plan.update({ where: { id }, data: { is_paused: true } });
+    return { message: 'Plan paused' };
+  }
+
+  async resume({ userId, id }: { userId: string; id: string }) {
+    const plan = await this.prisma.plan.findUnique({ where: { id, user_id: userId } });
+    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    if (!plan.is_paused) return { message: 'Plan is not paused' };
+
+    await this.prisma.plan.update({ where: { id }, data: { is_paused: false } });
+
+    // If was SCHEDULED: re-run scheduling for incomplete leaves
+    if (plan.status === EPlanStatus.SCHEDULED) {
+      try {
+        await this.calendarScheduleService.generateAndApplyTaskSchedule({ userId, id });
+      } catch {
+        // Return partial success — plan is unpaused even if scheduling fails
+        return { message: 'Plan resumed; scheduling could not be restarted automatically' };
+      }
+    }
+
+    return { message: 'Plan resumed' };
+  }
+
+  async transition({ userId, id, to }: { userId: string; id: string; to: string }) {
+    const allowed = ['READY', 'DRAFT', 'DONE'];
+    if (!allowed.includes(to)) {
+      throw new AppException(AppErrorCode.INVALID_TRANSITION, `Target status ${to} is not allowed`);
+    }
+
+    const plan = await this.prisma.plan.findUnique({
+      where: { id, user_id: userId },
+      include: { tasks: true },
+    });
+    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+
+    const current = plan.status;
+
+    if (to === 'DONE') {
+      const leafIds = getLeafIds(plan.tasks);
+      const allDone = plan.tasks.filter((t) => leafIds.has(t.id)).every((t) => t.status === ETaskStatus.DONE);
+      if (!allDone) {
+        throw new AppException(AppErrorCode.INVALID_TRANSITION, 'All leaf tasks must be DONE before marking plan DONE');
+      }
+    }
+
+    const validTransitions: Record<string, string[]> = {
+      DRAFT: ['READY'],
+      READY: ['DRAFT', 'DONE'],
+      SCHEDULED: ['DRAFT', 'DONE'],
+      HOLD: ['READY'],
+      DONE: [],
+    };
+
+    if (!validTransitions[current]?.includes(to)) {
+      throw new AppException(AppErrorCode.INVALID_TRANSITION, `Cannot transition from ${current} to ${to}`);
+    }
+
+    await this.prisma.plan.update({ where: { id }, data: { status: to as EPlanStatus } });
+    return { message: `Plan transitioned to ${to}` };
   }
 
   async remove({ id, userId }: IRemovePlanProps) {
-    const plan = await this.getDetail({
-      id,
-      userId,
+    const plan = await this.prisma.plan.findUnique({
+      where: { id, user_id: userId },
+      include: { tasks: { include: { events: { where: { is_active: true } } } } },
     });
-    if (typeof plan === 'string') return plan;
+    if (!plan) throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
 
-    await this.prisma.plan.delete({
-      where: {
-        id,
-        user_id: userId,
-      },
-    });
-    return `Remove plan success.`;
+    // Delete active Calendar events for incomplete leaves
+    if (plan.status === EPlanStatus.SCHEDULED) {
+      const incompleteTasks = plan.tasks.filter((t) => t.status !== ETaskStatus.DONE);
+      const activeEventIds = incompleteTasks.flatMap((t) => t.events.map((e) => e.google_event_id));
+      if (activeEventIds.length > 0) {
+        const calClient = await this.calendarService.getClient(userId);
+        await this.calendarService.removeEvents({ client: calClient, calendarId: 'primary', events: activeEventIds });
+      }
+    }
+
+    await this.prisma.plan.delete({ where: { id, user_id: userId } });
+    return { message: 'Plan deleted' };
   }
 
   async updateTask({
@@ -282,59 +316,10 @@ const updatePlanStatus = async ({ id, status, client }: IUpdatePlanStatus) => {
   return `Trigger ${status} on #${id} plan success.`;
 };
 
-const holdPlan = async ({ id, userId, client, calendar }: IHoldPlanProps) => {
-  await updatePlanStatus({
-    id,
-    status: EPlanStatus.HOLD,
-    client,
-  });
-
-  // delete event except task_status Done
-  const calendarClient = await calendar.getClient(userId);
-
-  const relatedEvents = await calendarClient.events.list({
-    calendarId: 'primary',
-    privateExtendedProperty: [`plan_id=${id}`],
-  });
-
-  // Note: can migrate source_id into task model for easily manage schedule event
-  const staleTasks = await client.task.findMany({
-    where: {
-      plan_id: id,
-      status: {
-        not: ETaskStatus.DONE,
-      },
-    },
-  });
-
-  // filter events which related task is not done yet
-  const focusDeleteEventIds =
-    relatedEvents.data.items?.reduce(
-      (acc: Array<string>, { id, extendedProperties }) => {
-        const { task_id } =
-          extendedProperties?.private as IEventPrivateProperties;
-
-        if (staleTasks.some((task) => task.id === task_id)) {
-          acc.push(id!);
-        }
-
-        return acc;
-      },
-      [],
-    ) ?? [];
-
-  // remove events
-  return await calendar.removeEvents({
-    client: calendarClient,
-    calendarId: 'primary',
-    events: focusDeleteEventIds,
-  });
+const getLeafIds = (tasks: { id: string; parent_task_id: string | null }[]) => {
+  const parentSet = new Set(tasks.map((t) => t.parent_task_id).filter(Boolean) as string[]);
+  return new Set(tasks.filter((t) => !parentSet.has(t.id)).map((t) => t.id));
 };
-
-interface IEventPrivateProperties {
-  plan_id?: string;
-  task_id?: string;
-}
 
 const collectSubtreeIds = (tasks: Task[], rootId: string | null): Set<string> => {
   const ids = new Set<string>();
