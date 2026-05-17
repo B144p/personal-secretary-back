@@ -52,10 +52,25 @@ model Plan {
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
 
-  user  User   @relation(fields: [user_id], references: [id])
-  tasks Task[]
+  user      User            @relation(fields: [user_id], references: [id])
+  tasks     Task[]
+  feedbacks DailyFeedback[]
 
   @@map("plan")
+}
+
+model DailyFeedback {
+  id             String   @id @default(uuid())
+  plan_id        String
+  date           DateTime
+  status_changes Json
+  context_text   String?
+  created_at     DateTime @default(now())
+
+  plan Plan @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+
+  @@index([plan_id, created_at])
+  @@map("daily_feedback")
 }
 
 model Task {
@@ -72,11 +87,26 @@ model Task {
   create_at DateTime @default(now())
   update_at DateTime @updatedAt
 
-  plan     Plan   @relation(fields: [plan_id], references: [id], onDelete: Cascade)
-  parent   Task?  @relation("TaskTree", fields: [parent_task_id], references: [id])
-  children Task[] @relation("TaskTree")
+  plan     Plan        @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+  parent   Task?       @relation("TaskTree", fields: [parent_task_id], references: [id])
+  children Task[]      @relation("TaskTree")
+  events   TaskEvent[]
 
   @@map("task")
+}
+
+model TaskEvent {
+  id              String   @id @default(uuid())
+  task_id         String
+  google_event_id String
+  start           DateTime
+  end             DateTime
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now())
+
+  task Task @relation(fields: [task_id], references: [id], onDelete: Cascade)
+
+  @@map("task_event")
 }
 
 model CategoryRule {
