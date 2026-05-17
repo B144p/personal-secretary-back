@@ -1,0 +1,49 @@
+import { HttpException, HttpStatus } from '@nestjs/common';
+
+export const AppErrorCode = {
+  UNAUTHENTICATED: 'UNAUTHENTICATED',
+  GOOGLE_REAUTH_REQUIRED: 'GOOGLE_REAUTH_REQUIRED',
+  PLAN_NOT_FOUND: 'PLAN_NOT_FOUND',
+  PLAN_NOT_EDITABLE: 'PLAN_NOT_EDITABLE',
+  INVALID_TRANSITION: 'INVALID_TRANSITION',
+  ANOTHER_PLAN_SCHEDULED: 'ANOTHER_PLAN_SCHEDULED',
+  PLAN_PAUSED: 'PLAN_PAUSED',
+  REASON_REQUIRED: 'REASON_REQUIRED',
+  INVALID_GOAL: 'INVALID_GOAL',
+  INVALID_HOURS: 'INVALID_HOURS',
+  INVALID_TIMEZONE: 'INVALID_TIMEZONE',
+  NO_OP_FEEDBACK: 'NO_OP_FEEDBACK',
+  AI_GENERATION_FAILED: 'AI_GENERATION_FAILED',
+  SCHEDULING_INFEASIBLE: 'SCHEDULING_INFEASIBLE',
+  GOOGLE_CALENDAR_ERROR: 'GOOGLE_CALENDAR_ERROR',
+} as const;
+
+export type AppErrorCodeType = (typeof AppErrorCode)[keyof typeof AppErrorCode];
+
+const statusMap: Record<AppErrorCodeType, HttpStatus> = {
+  UNAUTHENTICATED: HttpStatus.UNAUTHORIZED,
+  GOOGLE_REAUTH_REQUIRED: HttpStatus.UNAUTHORIZED,
+  PLAN_NOT_FOUND: HttpStatus.NOT_FOUND,
+  PLAN_NOT_EDITABLE: HttpStatus.UNPROCESSABLE_ENTITY,
+  INVALID_TRANSITION: HttpStatus.UNPROCESSABLE_ENTITY,
+  ANOTHER_PLAN_SCHEDULED: HttpStatus.CONFLICT,
+  PLAN_PAUSED: HttpStatus.CONFLICT,
+  REASON_REQUIRED: HttpStatus.BAD_REQUEST,
+  INVALID_GOAL: HttpStatus.BAD_REQUEST,
+  INVALID_HOURS: HttpStatus.BAD_REQUEST,
+  INVALID_TIMEZONE: HttpStatus.BAD_REQUEST,
+  NO_OP_FEEDBACK: HttpStatus.BAD_REQUEST,
+  AI_GENERATION_FAILED: HttpStatus.BAD_GATEWAY,
+  SCHEDULING_INFEASIBLE: HttpStatus.UNPROCESSABLE_ENTITY,
+  GOOGLE_CALENDAR_ERROR: HttpStatus.BAD_GATEWAY,
+};
+
+export class AppException extends HttpException {
+  constructor(
+    public readonly code: AppErrorCodeType,
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super({ code, message, details }, statusMap[code]);
+  }
+}

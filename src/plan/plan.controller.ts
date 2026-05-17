@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
@@ -17,13 +18,15 @@ import { GeneratePlanDto } from './dto/generate-plan.dto';
 import { ReGeneratePlanDto } from './dto/re-generate-plan.dto';
 import { IPlanActionMode } from './interfaces';
 import { PlanService } from './plan.service';
+import { UpdateProgressService } from './update.progress';
 
 @Controller('plan')
+@UseGuards(AuthGuard(JWT_STRATEGY_NAME))
 export class PlanController {
   constructor(private readonly planService: PlanService) {}
 
+  @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @Post('generate')
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   async generate(
     @Req() req: Request,
     @Body() generatePlanDto: GeneratePlanDto,
@@ -34,8 +37,18 @@ export class PlanController {
     });
   }
 
+  @Patch(':id/schedule/remove')
+  async removeRelatedCalendarEvent(
+    @Req() req: Request,
+    @Param('id') id: string,
+  ) {
+    return await this.planService.removeRelatedCalendarEvent({
+      userId: validateJwtPayload(req.user).sub,
+      planId: id,
+    });
+  }
+
   @Get()
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   async getList(@Req() req: Request) {
     return await this.planService.getList({
       userId: validateJwtPayload(req.user).sub,
@@ -43,7 +56,6 @@ export class PlanController {
   }
 
   @Get(':id')
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   async getDetail(@Req() req: Request, @Param('id') id: string) {
     return await this.planService.getDetail({
       userId: validateJwtPayload(req.user).sub,
@@ -51,8 +63,8 @@ export class PlanController {
     });
   }
 
+  @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @Post(':id/re_generate')
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   reGenerate(
     @Req() req: Request,
     @Param('id') id: string,
@@ -68,7 +80,6 @@ export class PlanController {
   }
 
   @Patch(':id/schedule')
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   taskSchedule(@Req() req: Request, @Param('id') id: string) {
     return this.planService.generateAndApplyTaskSchedule({
       userId: validateJwtPayload(req.user).sub,
@@ -77,7 +88,6 @@ export class PlanController {
   }
 
   @Patch(':id/:mode')
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   planAction(
     @Req() req: Request,
     @Param('id') id: string,
@@ -91,11 +101,31 @@ export class PlanController {
   }
 
   @Delete(':id')
-  @UseGuards(AuthGuard(JWT_STRATEGY_NAME))
   remove(@Req() req: Request, @Param('id') id: string) {
     return this.planService.remove({
       id,
       userId: validateJwtPayload(req.user).sub,
+    });
+  }
+}
+
+@Controller('plan-progress')
+@UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+export class PlanProgressController {
+  constructor(private readonly updateProgressService: UpdateProgressService) {}
+
+  @Get()
+  async getCurrentSchedule(@Req() req: Request) {
+    return await this.updateProgressService.getCurrentSchedule({
+      userId: validateJwtPayload(req.user).sub,
+    });
+  }
+
+  @Patch()
+  taskSchedule(@Req() req: Request) {
+    return this.updateProgressService.updateProgress({
+      userId: validateJwtPayload(req.user).sub,
+      data: {},
     });
   }
 }
