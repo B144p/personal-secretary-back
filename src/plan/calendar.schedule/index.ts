@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import dayjs from 'dayjs';
 import OpenAI from 'openai';
-import { ChatModel } from 'openai/resources';
 import pLimit from 'p-limit';
+import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -14,8 +14,6 @@ import {
   IGenerateScheduleResponse,
 } from '../schemas';
 import { schedulePrompt } from './prompt';
-
-const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
 const limit = pLimit(2);
 
@@ -77,6 +75,124 @@ export class CalendarScheduleService {
 
     const { id, title, tasks } = plan;
     return { id, title, tasks };
+  }
+
+  async getCurrentSchedule({ userId }: { userId: string }) {
+    const calendarEvents = await getCalendarWithScope({
+      client: this.calendarService,
+      userId,
+      range: {
+        timeMin: dayjs().startOf('d').toISOString(),
+        timeMax: dayjs().endOf('d').toISOString(),
+      },
+    });
+
+    // Support multiple plans in the same day. And filter event that are not related to any plan.
+    // const scheduleMap = calendarEvents.results.reduce(
+    //   (acc: Record<string, string[]>, { extendedProperties }) => {
+    //     if (
+    //       !extendedProperties.private?.plan_id ||
+    //       !extendedProperties.private?.task_id
+    //     )
+    //       return acc;
+
+    //     const {
+    //       private: { plan_id, task_id },
+    //     } = extendedProperties;
+
+    //     if (!acc[plan_id]) {
+    //       acc[plan_id] = [];
+    //     }
+    //     acc[plan_id].push(task_id);
+
+    //     return acc;
+    //   },
+    //   {},
+    // );
+
+    // const plans = await this.prisma.plan.findMany({
+    //   where: {
+    //     id: {
+    //       in: Object.keys(scheduleMap),
+    //     },
+    //   },
+    //   include: { tasks: true },
+    // });
+    // const plansMapped = Object.entries(scheduleMap).reduce(
+    //   (acc: typeof plans, [planId, taskIds]) => {
+    //     const plan = plans.find((p) => p.id === planId);
+    //     if (!plan) return acc;
+
+    //     acc.push({
+    //       ...plan,
+    //       tasks: plan.tasks.filter((task) => taskIds.includes(task.id)),
+    //     });
+    //     return acc;
+    //   },
+    //   [],
+    // );
+    // return plansMapped;
+
+    // ========================================================================
+    // const plansCustomQuery = await this.prisma.plan.findMany({
+    //   where: {
+    //     id: {
+    //       in: Object.keys(scheduleMap),
+    //     },
+    //   },
+    //   include: {
+    //     tasks: {
+    //       where: {
+    //         id: {
+    //           in: Object.values(scheduleMap).flat(),
+    //         },
+    //       },
+    //     },
+    //   },
+    // });
+    // return plansCustomQuery;
+
+    // return { plans, plansCustomQuery };
+
+    // ========================================================================
+
+    const scheduleMap = calendarEvents.results.reduce(
+      (acc: Record<string, Set<string>>, { extendedProperties }) => {
+        if (
+          !extendedProperties.private?.plan_id ||
+          !extendedProperties.private?.task_id
+        )
+          return acc;
+
+        const {
+          private: { plan_id, task_id },
+        } = extendedProperties;
+
+        if (!acc[plan_id]) {
+          acc[plan_id] = new Set();
+        }
+        acc[plan_id].add(task_id);
+
+        return acc;
+      },
+      {},
+    );
+
+    const plans = await this.prisma.plan.findMany({
+      where: {
+        id: {
+          in: Object.keys(scheduleMap),
+        },
+      },
+      include: { tasks: true },
+    });
+
+    return plans.map((plan) => {
+      return {
+        ...plan,
+        tasks: plan.tasks.filter((task) => scheduleMap[plan.id]?.has(task.id)),
+      };
+    });
   }
 }
 
@@ -140,7 +256,7 @@ const generateTaskSchedule = async ({
   const refMapData = mapToRefs(plan.tasks);
 
   const llmRes = await client.responses.parse({
-    model: CHAT_MODEL,
+    model: getModelForTask(AiTask.SCHEDULING),
     input: [
       {
         role: 'system',

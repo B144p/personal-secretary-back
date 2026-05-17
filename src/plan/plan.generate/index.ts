@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import { calendar_v3 } from 'googleapis';
 import OpenAI from 'openai';
-import { ChatModel } from 'openai/resources';
+import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -17,8 +17,6 @@ import type {
   IUpsertPlanProps,
 } from './interface';
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
-
-const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
 @Injectable()
 export class GeneratePlanService {
@@ -70,6 +68,21 @@ export class GeneratePlanService {
 
     return upsertedPlan;
   }
+
+  async removeRelatedCalendarEvent({
+    userId,
+    planId,
+  }: {
+    userId: string;
+    planId: string;
+  }) {
+    const calendarClient = await this.calendarService.getClient(userId);
+    return await removeRelatedCalendarEvent({
+      client: calendarClient,
+      calendar: this.calendarService,
+      planId,
+    });
+  }
 }
 
 const generateTask = async ({
@@ -77,7 +90,7 @@ const generateTask = async ({
   prompt: { goal, more_info },
 }: IGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
-    model: CHAT_MODEL,
+    model: getModelForTask(AiTask.PLAN_GENERATION),
     input: [
       {
         role: 'system',
@@ -122,6 +135,10 @@ const generateTask = async ({
 };
 
 const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
+  if (process.env.NODE_ENV === 'development') {
+    plan.goal = `[DEV] ${plan.goal}`;
+    plan.tasks = plan.tasks.map((task) => `[DEV] ${task}`);
+  }
   if (planId) return await updatePlan({ user, client, plan, planId });
   return await createPlan({ user, client, plan });
 };
@@ -214,7 +231,7 @@ const reGenerateTask = async ({
   data: { feedback, earlierTask },
 }: IReGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
-    model: CHAT_MODEL,
+    model: getModelForTask(AiTask.REGENERATION),
     input: [
       {
         role: 'system',
