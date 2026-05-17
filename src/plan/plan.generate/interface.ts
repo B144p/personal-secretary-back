@@ -24,19 +24,17 @@ export interface IUpsertPlanProps {
 
 export interface IReGeneratePlanProps {
   userId: string;
-  earlierTask: {
-    title: string;
-    tasks: ITaskNode[];
-  };
+  preservedTasks: ITaskNode[];
+  parentTaskId: string | null;
   data: ReGeneratePlanDto & { id: string };
 }
 
 export interface IReGenerateTaskProps {
   client: OpenAI;
-  data: ReGeneratePlanDto & {
-    earlierTask: {
-      title: string;
-      tasks: ITaskNode[];
-    };
+  data: {
+    reason: string;
+    feedback?: string;
+    planTitle: string;
+    preservedTasks: ITaskNode[];
   };
 }

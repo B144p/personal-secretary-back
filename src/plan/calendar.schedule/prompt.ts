@@ -55,6 +55,7 @@ const developer = {
   executionStyle: `
     ## TASK EXECUTION STYLE
     - Prefer long, focused work blocks
+    - Minimum duration per block: {{minTaskDurationMin}} minutes
     - A task must use its full required duration
     - A task can span multiple time blocks or multiple days
 

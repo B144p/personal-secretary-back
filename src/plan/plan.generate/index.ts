@@ -35,27 +35,34 @@ export class GeneratePlanService {
     return createdPlan;
   }
 
-  async reGeneratePlan({ userId, earlierTask, data }: IReGeneratePlanProps) {
+  async reGeneratePlan({ userId, preservedTasks, parentTaskId, data }: IReGeneratePlanProps) {
+    const plan = await this.prisma.plan.findUnique({ where: { id: data.id } });
+    const planTitle = plan?.title ?? '';
+
     const reGeneratedPlan = await reGenerateTask({
       client: this.openai,
-      data: { feedback: data.feedback, earlierTask },
+      data: {
+        reason: data.reason,
+        feedback: data.feedback,
+        planTitle,
+        preservedTasks,
+      },
     });
-    const user = await this.userService.getProfile(userId);
-    const upsertedPlan = await upsertPlan({
-      user,
+
+    // Insert the regenerated subtree under the correct parent
+    await insertTaskTree({
       client: this.prisma,
-      plan: reGeneratedPlan.output,
       planId: data.id,
+      tasks: reGeneratedPlan.output.tasks,
+      parentId: parentTaskId,
+      depth: parentTaskId ? await getDepthForParent(this.prisma, parentTaskId) : 0,
     });
 
-    const calendarClient = await this.calendarService.getClient(userId);
-    await removeRelatedCalendarEvent({
-      client: calendarClient,
-      calendar: this.calendarService,
-      planId: data.id,
+    return this.prisma.plan.findUnique({
+      where: { id: data.id },
+      include: { tasks: true },
+      omit: { user_id: true },
     });
-
-    return upsertedPlan;
   }
 
   async removeRelatedCalendarEvent({ userId, planId }: { userId: string; planId: string }) {
@@ -244,7 +251,10 @@ const insertTaskTree = async ({
 
 // ─── Regenerate ──────────────────────────────────────────────────────────────
 
-const reGenerateTask = async ({ client, data: { feedback, earlierTask } }: IReGenerateTaskProps) => {
+const reGenerateTask = async ({
+  client,
+  data: { reason, feedback, planTitle, preservedTasks },
+}: IReGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
     model: getModelForTask(AiTask.REGENERATION),
     input: [
@@ -258,8 +268,16 @@ const reGenerateTask = async ({ client, data: { feedback, earlierTask } }: IReGe
       {
         role: 'user',
         content: [
-          { type: 'input_text' as const, text: `Existing Tasks: ${JSON.stringify(earlierTask)}` },
-          { type: 'input_text' as const, text: `User Feedback: ${feedback ?? 'Nothing'}` },
+          { type: 'input_text' as const, text: `Plan: ${planTitle}` },
+          { type: 'input_text' as const, text: `Reason for regeneration: ${reason}` },
+          {
+            type: 'input_text' as const,
+            text:
+              preservedTasks.length > 0
+                ? `Preserved tasks (already IN_PROGRESS or DONE — do not touch): ${JSON.stringify(preservedTasks)}`
+                : 'No preserved tasks.',
+          },
+          { type: 'input_text' as const, text: feedback ? `Additional feedback: ${feedback}` : '' },
         ],
       },
     ],
@@ -275,6 +293,11 @@ const reGenerateTask = async ({ client, data: { feedback, earlierTask } }: IReGe
 
   const outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
   return { usage: llmRes.usage, output: outputParsed as IGeneratePlanResponse };
+};
+
+const getDepthForParent = async (client: PrismaService, parentId: string) => {
+  const parent = await client.task.findUnique({ where: { id: parentId }, select: { depth: true } });
+  return (parent?.depth ?? 0) + 1;
 };
 
 // ─── Calendar cleanup ─────────────────────────────────────────────────────────

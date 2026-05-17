@@ -92,15 +92,58 @@ export class PlanService {
       'userId' | 'data'
     >,
   ) {
+    const { userId, data: dto } = data;
+
+    if (!dto.reason || dto.reason.length < 10) {
+      throw new AppException(AppErrorCode.REASON_REQUIRED, 'reason must be at least 10 characters');
+    }
+
     const plan = await this.prisma.plan.findUnique({
-      where: { id: data.data.id, user_id: data.userId },
+      where: { id: dto.id, user_id: userId },
       include: { tasks: true },
     });
-    if (!plan) return 'Plan is not found!';
+    if (!plan) throw new NotFoundException('Plan not found');
+
+    // Determine the subtree root
+    const rootTaskId = dto.task_id ?? null;
+    const subtaskIds = collectSubtreeIds(plan.tasks, rootTaskId);
+
+    // Classify tasks in scope
+    const subtree = plan.tasks.filter((t) => subtaskIds.has(t.id));
+    const pendingIds = subtree.filter((t) => t.status === ETaskStatus.PENDING).map((t) => t.id);
+    const preserved = subtree.filter((t) => t.status === ETaskStatus.IN_PROGRESS || t.status === ETaskStatus.DONE);
+
+    // If plan is SCHEDULED: delete calendar events for pending tasks being pruned
+    if (plan.status === EPlanStatus.SCHEDULED && pendingIds.length > 0) {
+      const activeEvents = await this.prisma.taskEvent.findMany({
+        where: { task_id: { in: pendingIds }, is_active: true },
+      });
+      if (activeEvents.length > 0) {
+        const calClient = await this.calendarService.getClient(userId);
+        await this.calendarService.removeEvents({
+          client: calClient,
+          calendarId: 'primary',
+          events: activeEvents.map((e) => e.google_event_id),
+        });
+        await this.prisma.taskEvent.updateMany({
+          where: { id: { in: activeEvents.map((e) => e.id) } },
+          data: { is_active: false },
+        });
+      }
+    }
+
+    // Delete pending tasks in subtree
+    if (pendingIds.length > 0) {
+      await this.prisma.task.deleteMany({ where: { id: { in: pendingIds } } });
+    }
+
+    const preservedTree = buildTaskTree(preserved, rootTaskId ?? null);
 
     return await this.generatePlanService.reGeneratePlan({
-      ...data,
-      earlierTask: { title: plan.title, tasks: buildTaskTree(plan.tasks, null) },
+      userId,
+      preservedTasks: preservedTree,
+      parentTaskId: rootTaskId,
+      data: dto,
     });
   }
 
@@ -292,6 +335,16 @@ interface IEventPrivateProperties {
   plan_id?: string;
   task_id?: string;
 }
+
+const collectSubtreeIds = (tasks: Task[], rootId: string | null): Set<string> => {
+  const ids = new Set<string>();
+  const queue = rootId ? [rootId] : tasks.filter((t) => t.parent_task_id === null).map((t) => t.id);
+  for (const id of queue) {
+    ids.add(id);
+    tasks.filter((t) => t.parent_task_id === id).forEach((t) => queue.push(t.id));
+  }
+  return ids;
+};
 
 const buildTaskTree = (tasks: Task[], parentId: string | null): ReturnType<typeof import('./schemas').generatePlanResponseSchema.shape.tasks.element.parse>[] => {
   return tasks
