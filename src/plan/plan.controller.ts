@@ -137,10 +137,10 @@ export class PlanProgressController {
   }
 
   @Patch()
-  taskSchedule(@Req() req: Request) {
+  updateProgress(@Req() req: Request, @Body() body: unknown) {
     return this.updateProgressService.updateProgress({
       userId: validateJwtPayload(req.user).sub,
-      data: {},
+      data: body as { statusChanges?: Array<{ taskId: string; newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE' }>; contextText?: string },
     });
   }
 }
