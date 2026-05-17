@@ -4,11 +4,12 @@ import { calendar_v3 } from 'googleapis';
 import OpenAI from 'openai';
 import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
+import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { z } from 'zod';
-import { generatePlanResponseSchema } from '../schemas';
+import { generatePlanResponseSchema, IGeneratePlanResponse, ITaskNode } from '../schemas';
 import type {
   IGeneratePlanProps,
   IGenerateTaskProps,
@@ -28,27 +29,16 @@ export class GeneratePlanService {
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
-    const generatedPlan = await generateTask({
-      client: this.openai,
-      prompt,
-    });
+    const generatedPlan = await generateTask({ client: this.openai, prompt });
     const user = await this.userService.getProfile(userId);
-    const createdPlan = await upsertPlan({
-      user,
-      client: this.prisma,
-      plan: generatedPlan.output,
-    });
-
+    const createdPlan = await upsertPlan({ user, client: this.prisma, plan: generatedPlan.output });
     return createdPlan;
   }
 
   async reGeneratePlan({ userId, earlierTask, data }: IReGeneratePlanProps) {
     const reGeneratedPlan = await reGenerateTask({
       client: this.openai,
-      data: {
-        feedback: data.feedback,
-        earlierTask,
-      },
+      data: { feedback: data.feedback, earlierTask },
     });
     const user = await this.userService.getProfile(userId);
     const upsertedPlan = await upsertPlan({
@@ -58,7 +48,6 @@ export class GeneratePlanService {
       planId: data.id,
     });
 
-    // remove events related to the plan in calendar
     const calendarClient = await this.calendarService.getClient(userId);
     await removeRelatedCalendarEvent({
       client: calendarClient,
@@ -69,13 +58,7 @@ export class GeneratePlanService {
     return upsertedPlan;
   }
 
-  async removeRelatedCalendarEvent({
-    userId,
-    planId,
-  }: {
-    userId: string;
-    planId: string;
-  }) {
+  async removeRelatedCalendarEvent({ userId, planId }: { userId: string; planId: string }) {
     const calendarClient = await this.calendarService.getClient(userId);
     return await removeRelatedCalendarEvent({
       client: calendarClient,
@@ -85,172 +68,198 @@ export class GeneratePlanService {
   }
 }
 
-const generateTask = async ({
-  client,
-  prompt: { goal, more_info },
-}: IGenerateTaskProps) => {
-  const llmRes = await client.responses.parse({
-    model: getModelForTask(AiTask.PLAN_GENERATION),
-    input: [
-      {
-        role: 'system',
-        content: Object.values(generatePlanPrompt.system).map((prompt) => ({
-          type: 'input_text',
-          text: prompt,
-        })),
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: `Generate task plan for: ${goal}`,
-          },
-          {
-            type: 'input_text',
-            text: more_info ? `More info: ${more_info}` : '',
-          },
-        ],
-      },
-    ],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'plan',
-        strict: true,
-        schema: z.toJSONSchema(generatePlanResponseSchema),
-      },
-    },
-  });
+// ─── AI call ────────────────────────────────────────────────────────────────
 
-  const outputParsed = validateOpenAIResponse(
-    generatePlanResponseSchema,
-    llmRes.output_parsed,
-  );
+const generateTask = async ({ client, prompt: { goal, more_info } }: IGenerateTaskProps) => {
+  const call = () =>
+    client.responses.parse({
+      model: getModelForTask(AiTask.PLAN_GENERATION),
+      input: [
+        {
+          role: 'system',
+          content: Object.values(generatePlanPrompt.system).map((text) => ({
+            type: 'input_text' as const,
+            text,
+          })),
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text' as const, text: `Generate task plan for: ${goal}` },
+            { type: 'input_text' as const, text: more_info ? `More info: ${more_info}` : '' },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'plan',
+          strict: true,
+          schema: z.toJSONSchema(generatePlanResponseSchema),
+        },
+      },
+    });
 
-  return {
-    usage: llmRes.usage,
-    output: outputParsed,
-  };
+  let llmRes = await call();
+  let outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
+
+  if (exceedsMaxDepth(outputParsed.tasks, 0)) {
+    llmRes = await client.responses.parse({
+      model: getModelForTask(AiTask.PLAN_GENERATION),
+      input: [
+        {
+          role: 'system',
+          content: Object.values(generatePlanPrompt.system).map((text) => ({
+            type: 'input_text' as const,
+            text,
+          })),
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text' as const, text: `Generate task plan for: ${goal}` },
+            { type: 'input_text' as const, text: more_info ? `More info: ${more_info}` : '' },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: JSON.stringify(outputParsed),
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_text' as const,
+              text: 'The previous response exceeded maximum depth of 4. Please flatten it so no task tree is deeper than 4 levels.',
+            },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'plan',
+          strict: true,
+          schema: z.toJSONSchema(generatePlanResponseSchema),
+        },
+      },
+    });
+    outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
+
+    if (exceedsMaxDepth(outputParsed.tasks, 0)) {
+      throw new AppException(AppErrorCode.AI_GENERATION_FAILED, 'Generated task tree exceeds maximum depth of 4 after retry');
+    }
+  }
+
+  return { usage: llmRes.usage, output: outputParsed };
 };
+
+const exceedsMaxDepth = (tasks: ITaskNode[], currentDepth: number): boolean => {
+  if (currentDepth > 4) return true;
+  return tasks.some((t) => t.children.length > 0 && exceedsMaxDepth(t.children, currentDepth + 1));
+};
+
+// ─── DB persist ─────────────────────────────────────────────────────────────
 
 const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
   if (process.env.NODE_ENV === 'development') {
     plan.goal = `[DEV] ${plan.goal}`;
-    plan.tasks = plan.tasks.map((task) => `[DEV] ${task}`);
   }
   if (planId) return await updatePlan({ user, client, plan, planId });
   return await createPlan({ user, client, plan });
 };
 
-const createPlan = async ({
-  user,
-  client,
-  plan,
-}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
-  const { tasks, ...restCreatedPlan } = await client.plan.create({
+const createPlan = async ({ user, client, plan }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
+  const created = await client.plan.create({
     data: {
       user_id: user.id,
       title: plan.goal,
       source_type: EPlanSourceType.GENERATE,
       status: EPlanStatus.DRAFT,
-      tasks: {
-        createMany: {
-          data: plan.tasks.map((task) => ({
-            title: task,
-            status: ETaskStatus.PENDING,
-          })),
-        },
-      },
     },
-    include: {
-      tasks: {
-        select: {
-          title: true,
-        },
-      },
-    },
-    omit: {
-      user_id: true,
-    },
+    omit: { user_id: true },
   });
 
-  return {
-    ...restCreatedPlan,
-    tasks: tasks.map(({ title }) => title),
-  };
+  await insertTaskTree({ client, planId: created.id, tasks: plan.tasks, parentId: null, depth: 0 });
+
+  return client.plan.findUnique({
+    where: { id: created.id },
+    include: { tasks: true },
+    omit: { user_id: true },
+  });
 };
 
-const updatePlan = async ({
-  user,
-  client,
-  plan,
-  planId,
-}: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
-  // This phase: replace all existing tasks with re-generated tasks.
-  const { tasks, ...restCreatedPlan } = await client.plan.update({
-    where: {
-      id: planId,
-      user_id: user.id,
-    },
+const updatePlan = async ({ user, client, plan, planId }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
+  await client.plan.update({
+    where: { id: planId, user_id: user.id },
     data: {
       title: plan.goal,
       status: EPlanStatus.DRAFT,
-      tasks: {
-        deleteMany: {
-          plan_id: planId,
-        },
-        createMany: {
-          data: plan.tasks.map((task) => ({
-            title: task,
-            status: ETaskStatus.PENDING,
-          })),
-        },
-      },
-    },
-    include: {
-      tasks: {
-        select: {
-          title: true,
-        },
-      },
-    },
-    omit: {
-      user_id: true,
+      tasks: { deleteMany: { plan_id: planId as string } },
     },
   });
 
-  return {
-    ...restCreatedPlan,
-    tasks: tasks.map(({ title }) => title),
-  };
+  await insertTaskTree({ client, planId: planId as string, tasks: plan.tasks, parentId: null, depth: 0 });
+
+  return client.plan.findUnique({
+    where: { id: planId as string },
+    include: { tasks: true },
+    omit: { user_id: true },
+  });
 };
 
-const reGenerateTask = async ({
+const insertTaskTree = async ({
   client,
-  data: { feedback, earlierTask },
-}: IReGenerateTaskProps) => {
+  planId,
+  tasks,
+  parentId,
+  depth,
+}: {
+  client: PrismaService;
+  planId: string;
+  tasks: ITaskNode[];
+  parentId: string | null;
+  depth: number;
+}) => {
+  for (const task of tasks) {
+    const isLeaf = task.children.length === 0;
+    const created = await client.task.create({
+      data: {
+        plan_id: planId,
+        title: task.title,
+        description: task.description,
+        status: ETaskStatus.PENDING,
+        parent_task_id: parentId,
+        depth,
+        sequence_order: task.sequence_order,
+        estimated_minutes: isLeaf ? task.estimated_minutes : null,
+      },
+    });
+
+    if (task.children.length > 0) {
+      await insertTaskTree({ client, planId, tasks: task.children, parentId: created.id, depth: depth + 1 });
+    }
+  }
+};
+
+// ─── Regenerate ──────────────────────────────────────────────────────────────
+
+const reGenerateTask = async ({ client, data: { feedback, earlierTask } }: IReGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
     model: getModelForTask(AiTask.REGENERATION),
     input: [
       {
         role: 'system',
-        content: Object.values(reGeneratePlanPrompt.system).map((prompt) => ({
-          type: 'input_text',
-          text: prompt,
+        content: Object.values(reGeneratePlanPrompt.system).map((text) => ({
+          type: 'input_text' as const,
+          text,
         })),
       },
       {
         role: 'user',
         content: [
-          {
-            type: 'input_text',
-            text: `Existing Tasks: ${JSON.stringify(earlierTask)}`,
-          },
-          {
-            type: 'input_text',
-            text: `User Feedback: ${feedback ?? 'Nothing'}`,
-          },
+          { type: 'input_text' as const, text: `Existing Tasks: ${JSON.stringify(earlierTask)}` },
+          { type: 'input_text' as const, text: `User Feedback: ${feedback ?? 'Nothing'}` },
         ],
       },
     ],
@@ -264,16 +273,11 @@ const reGenerateTask = async ({
     },
   });
 
-  const outputParsed = validateOpenAIResponse(
-    generatePlanResponseSchema,
-    llmRes.output_parsed,
-  );
-
-  return {
-    usage: llmRes.usage,
-    output: outputParsed,
-  };
+  const outputParsed = validateOpenAIResponse(generatePlanResponseSchema, llmRes.output_parsed);
+  return { usage: llmRes.usage, output: outputParsed as IGeneratePlanResponse };
 };
+
+// ─── Calendar cleanup ─────────────────────────────────────────────────────────
 
 const removeRelatedCalendarEvent = async ({
   client,
@@ -301,7 +305,5 @@ const removeRelatedCalendarEvent = async ({
     events: focusDeleteEventIds,
   });
 
-  return {
-    message: 'Related calendar events are removed successfully.',
-  };
+  return { message: 'Related calendar events are removed successfully.' };
 };

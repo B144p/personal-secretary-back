@@ -1,6 +1,7 @@
 export {
   generatePlanResponseSchema,
   IGeneratePlanResponse,
+  ITaskNode,
 } from './generate-plan';
 export {
   generateScheduleResponseSchema,

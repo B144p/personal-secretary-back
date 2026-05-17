@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { EPlanStatus, ETaskStatus } from '@prisma/client';
+import { EPlanStatus, ETaskStatus, Task } from '@prisma/client';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { IHoldPlanProps } from 'src/calendar/interfaces';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -91,15 +91,15 @@ export class PlanService {
       'userId' | 'data'
     >,
   ) {
-    const earlierTask = await this.getDetail({
-      id: data.data.id,
-      userId: data.userId,
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: data.data.id, user_id: data.userId },
+      include: { tasks: true },
     });
-    if (typeof earlierTask === 'string') return earlierTask;
+    if (!plan) return 'Plan is not found!';
 
     return await this.generatePlanService.reGeneratePlan({
       ...data,
-      earlierTask,
+      earlierTask: { title: plan.title, tasks: buildTaskTree(plan.tasks, null) },
     });
   }
 
@@ -188,6 +188,14 @@ export class PlanService {
     });
     return `Remove plan success.`;
   }
+
+  async removeRelatedCalendarEvent(
+    data: Parameters<
+      typeof this.generatePlanService.removeRelatedCalendarEvent
+    >[0],
+  ) {
+    return await this.generatePlanService.removeRelatedCalendarEvent(data);
+  }
 }
 
 const updatePlanStatus = async ({ id, status, client }: IUpdatePlanStatus) => {
@@ -251,3 +259,16 @@ interface IEventPrivateProperties {
   plan_id?: string;
   task_id?: string;
 }
+
+const buildTaskTree = (tasks: Task[], parentId: string | null): ReturnType<typeof import('./schemas').generatePlanResponseSchema.shape.tasks.element.parse>[] => {
+  return tasks
+    .filter((t) => t.parent_task_id === parentId)
+    .sort((a, b) => a.sequence_order - b.sequence_order)
+    .map((t) => ({
+      title: t.title,
+      description: t.description ?? '',
+      sequence_order: t.sequence_order,
+      estimated_minutes: t.estimated_minutes,
+      children: buildTaskTree(tasks, t.id) as any,
+    }));
+};
