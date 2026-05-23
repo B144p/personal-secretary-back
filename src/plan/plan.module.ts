@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import OpenAI from 'openai';
 import { CalendarModule } from 'src/calendar/calendar.module';
 import { UserModule } from 'src/user/user.module';
 import { CalendarScheduleService } from './calendar.schedule';
@@ -13,7 +12,6 @@ import { UpdateProgressService } from './update.progress';
   controllers: [PlanController, PlanProgressController],
   providers: [
     PlanService,
-    OpenAI,
     CalendarScheduleService,
     GeneratePlanService,
     UpdateProgressService,

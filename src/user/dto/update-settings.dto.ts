@@ -20,7 +20,14 @@ export const updateSettingsSchema = z.object({
       }
     }, 'Invalid IANA time zone')
     .optional(),
-  special_days: z.array(z.string()).optional(),
+  special_days: z
+    .array(
+      z.object({
+        date: z.string(),
+        available: z.boolean(),
+      }),
+    )
+    .optional(),
 });
 
 export type UpdateSettingsDto = z.infer<typeof updateSettingsSchema>;

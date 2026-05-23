@@ -41,6 +41,13 @@ export class UpdateProgressService {
   async updateProgress({ userId, data }: IUpdateProgressProps) {
     const { statusChanges = [], contextText } = data;
 
+    if (statusChanges.length === 0 && !contextText) {
+      throw new AppException(
+        AppErrorCode.NO_OP_FEEDBACK,
+        'No changes to submit',
+      );
+    }
+
     // Find the user's active SCHEDULED plan
     const plan = await this.prisma.plan.findFirst({
       where: { user_id: userId, status: EPlanStatus.SCHEDULED },
@@ -117,7 +124,7 @@ export class UpdateProgressService {
         data: { status: EPlanStatus.DONE },
       });
       return {
-        rescheduled: [],
+        rescheduled: 0,
         planStatus: EPlanStatus.DONE,
         unscheduledTaskIds: [],
       };
@@ -135,7 +142,7 @@ export class UpdateProgressService {
 
     if (slippedLeaves.length === 0) {
       return {
-        rescheduled: [],
+        rescheduled: 0,
         planStatus: EPlanStatus.SCHEDULED,
         unscheduledTaskIds: [],
       };
@@ -215,7 +222,7 @@ export class UpdateProgressService {
     }
 
     return {
-      rescheduled,
+      rescheduled: rescheduled.length,
       planStatus: EPlanStatus.SCHEDULED,
       unscheduledTaskIds,
     };

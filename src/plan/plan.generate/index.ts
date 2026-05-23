@@ -23,6 +23,24 @@ import type {
 } from './interface';
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
 
+// z.toJSONSchema(z.tuple([])) emits prefixItems:[] which OpenAI rejects.
+// Walk the schema and replace empty-tuple nodes with a maxItems:0 array.
+const patchSchema = (s: unknown): unknown => {
+  if (Array.isArray(s)) return s.map(patchSchema);
+  if (s !== null && typeof s === 'object') {
+    const obj = s as Record<string, unknown>;
+    if (Array.isArray(obj.prefixItems) && obj.prefixItems.length === 0) {
+      return { type: 'array', items: { type: 'string' }, maxItems: 0 };
+    }
+    return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, patchSchema(v)]));
+  }
+  return s;
+};
+
+const GENERATE_PLAN_JSON_SCHEMA = patchSchema(
+  z.toJSONSchema(generatePlanResponseSchema),
+) as Record<string, unknown>;
+
 @Injectable()
 export class GeneratePlanService {
   constructor(
@@ -73,11 +91,7 @@ export class GeneratePlanService {
         : 0,
     });
 
-    return this.prisma.plan.findUnique({
-      where: { id: data.id },
-      include: { tasks: true },
-      omit: { user_id: true },
-    });
+    return loadPlanWithTaskTree(this.prisma, data.id);
   }
 
   async removeRelatedCalendarEvent({
@@ -132,12 +146,18 @@ const generateTask = async ({
           type: 'json_schema',
           name: 'plan',
           strict: true,
-          schema: z.toJSONSchema(generatePlanResponseSchema),
+          schema: GENERATE_PLAN_JSON_SCHEMA,
         },
       },
     });
 
-  let llmRes = await call();
+  let llmRes: Awaited<ReturnType<typeof call>>;
+  try {
+    llmRes = await call();
+  } catch (err) {
+    console.error('[generateTask] OpenAI call failed:', err);
+    throw err;
+  }
   let outputParsed = validateOpenAIResponse(
     generatePlanResponseSchema,
     llmRes.output_parsed,
@@ -186,7 +206,7 @@ const generateTask = async ({
           type: 'json_schema',
           name: 'plan',
           strict: true,
-          schema: z.toJSONSchema(generatePlanResponseSchema),
+          schema: GENERATE_PLAN_JSON_SCHEMA,
         },
       },
     });
@@ -236,7 +256,6 @@ const createPlan = async ({
       source_type: EPlanSourceType.GENERATE,
       status: EPlanStatus.DRAFT,
     },
-    omit: { user_id: true },
   });
 
   await insertTaskTree({
@@ -247,11 +266,7 @@ const createPlan = async ({
     depth: 0,
   });
 
-  return client.plan.findUnique({
-    where: { id: created.id },
-    include: { tasks: true },
-    omit: { user_id: true },
-  });
+  return loadPlanWithTaskTree(client, created.id);
 };
 
 const updatePlan = async ({
@@ -277,11 +292,40 @@ const updatePlan = async ({
     depth: 0,
   });
 
-  return client.plan.findUnique({
-    where: { id: planId as string },
-    include: { tasks: true },
-    omit: { user_id: true },
+  return loadPlanWithTaskTree(client, planId as string);
+};
+
+const loadPlanWithTaskTree = async (client: PrismaService, planId: string) => {
+  const plan = await client.plan.findUnique({
+    where: { id: planId },
+    include: {
+      tasks: {
+        include: { events: { where: { is_active: true } } },
+        orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
+      },
+    },
   });
+  if (!plan) return null;
+  const { tasks, ...rest } = plan;
+  const byParent = new Map<string | null, (typeof tasks)[number][]>();
+  for (const t of tasks) {
+    const key = t.parent_task_id;
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(t);
+  }
+  const build = (parentId: string | null): unknown[] =>
+    (byParent.get(parentId) ?? [])
+      .sort((a, b) => a.sequence_order - b.sequence_order)
+      .map((t) => ({
+        ...t,
+        description: t.description ?? '',
+        children: build(t.id),
+      }));
+  return {
+    ...rest,
+    source_type: rest.source_type ?? 'GENERATE',
+    tasks: build(null),
+  };
 };
 
 const insertTaskTree = async ({
@@ -367,7 +411,7 @@ const reGenerateTask = async ({
         type: 'json_schema',
         name: 'plan',
         strict: true,
-        schema: z.toJSONSchema(generatePlanResponseSchema),
+        schema: GENERATE_PLAN_JSON_SCHEMA,
       },
     },
   });

@@ -74,7 +74,7 @@ export class CalendarScheduleService {
       userState,
     });
 
-    const { eventRes, taskEvents } = await applySchedule({
+    const { taskEvents } = await applySchedule({
       userId,
       planId: id,
       client: this.calendarService,
@@ -100,10 +100,13 @@ export class CalendarScheduleService {
       }),
     ]);
 
-    return {
-      schedule: generatedSchedule.outputFormat.schedule,
-      eventRes,
-    };
+    const scheduledTaskIds = taskEvents.map((e) => e.taskId);
+    const scheduledLeafIds = new Set(scheduledTaskIds);
+    const unscheduledTaskIds = plan.tasks
+      .filter((t) => !scheduledLeafIds.has(t.id))
+      .map((t) => t.id);
+
+    return { scheduledTaskIds, unscheduledTaskIds };
   }
 
   async getLeafTasks(planId: string) {
@@ -136,42 +139,44 @@ export class CalendarScheduleService {
   }
 
   async getCurrentSchedule({ userId }: { userId: string }) {
-    const calendarEvents = await getCalendarWithScope({
-      client: this.calendarService,
-      userId,
-      range: {
-        timeMin: dayjs().startOf('d').toISOString(),
-        timeMax: dayjs().endOf('d').toISOString(),
+    const plan = await this.prisma.plan.findFirst({
+      where: {
+        user_id: userId,
+        status: EPlanStatus.SCHEDULED,
+        is_paused: false,
+      },
+      include: {
+        tasks: {
+          include: { events: { where: { is_active: true } } },
+          orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
+        },
       },
     });
+    if (!plan) return { plan: null };
 
-    const scheduleMap = calendarEvents.results.reduce(
-      (acc: Record<string, Set<string>>, { extendedProperties }) => {
-        if (
-          !extendedProperties.private?.plan_id ||
-          !extendedProperties.private?.task_id
-        )
-          return acc;
+    const { tasks, ...rest } = plan;
+    const byParent = new Map<string | null, (typeof tasks)[number][]>();
+    for (const t of tasks) {
+      const key = t.parent_task_id;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key)!.push(t);
+    }
+    const build = (parentId: string | null): unknown[] =>
+      (byParent.get(parentId) ?? [])
+        .sort((a, b) => a.sequence_order - b.sequence_order)
+        .map((t) => ({
+          ...t,
+          description: t.description ?? '',
+          children: build(t.id),
+        }));
 
-        const { plan_id, task_id } = extendedProperties.private;
-
-        if (!acc[plan_id]) acc[plan_id] = new Set();
-        acc[plan_id].add(task_id);
-
-        return acc;
+    return {
+      plan: {
+        ...rest,
+        source_type: rest.source_type ?? 'GENERATE',
+        tasks: build(null),
       },
-      {},
-    );
-
-    const plans = await this.prisma.plan.findMany({
-      where: { id: { in: Object.keys(scheduleMap) } },
-      include: { tasks: true },
-    });
-
-    return plans.map((plan) => ({
-      ...plan,
-      tasks: plan.tasks.filter((task) => scheduleMap[plan.id]?.has(task.id)),
-    }));
+    };
   }
 }
 

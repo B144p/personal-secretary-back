@@ -40,6 +40,7 @@ export class GoogleAuthService {
         email,
         avatar_url: profileUrl,
         refresh_token: encryptedToken ?? '',
+        user_state: { create: {} },
       },
     });
 

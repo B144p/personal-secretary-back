@@ -15,8 +15,8 @@ model User {
   name          String?
   avatar_url    String?
   refresh_token String
-  create_at     DateTime @default(now())
-  update_at     DateTime @updatedAt
+  created_at    DateTime @default(now()) @map("create_at")
+  updated_at    DateTime @updatedAt @map("update_at")
 
   user_state UserState?
   plan       Plan[]
@@ -50,8 +50,8 @@ model Plan {
   is_paused   Boolean          @default(false)
   paused_at   DateTime?
 
-  create_at DateTime @default(now())
-  update_at DateTime @updatedAt
+  created_at DateTime @default(now()) @map("create_at")
+  updated_at DateTime @updatedAt @map("update_at")
 
   user      User            @relation(fields: [user_id], references: [id])
   tasks     Task[]
@@ -85,8 +85,8 @@ model Task {
   sequence_order   Int         @default(0)
   estimated_minutes Int?
 
-  create_at DateTime @default(now())
-  update_at DateTime @updatedAt
+  created_at DateTime @default(now()) @map("create_at")
+  updated_at DateTime @updatedAt @map("update_at")
 
   plan     Plan        @relation(fields: [plan_id], references: [id], onDelete: Cascade)
   parent   Task?       @relation("TaskTree", fields: [parent_task_id], references: [id])

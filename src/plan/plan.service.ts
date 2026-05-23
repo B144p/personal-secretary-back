@@ -30,25 +30,17 @@ export class PlanService {
       where: { user_id: user.id },
       include: {
         tasks: {
-          select: {
-            title: true,
-          },
+          include: { events: { where: { is_active: true } } },
+          orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
         },
-      },
-      omit: {
-        user_id: true,
       },
     });
 
-    const planFormatedList = plans.map(({ tasks, ...rest }) => ({
+    return plans.map(({ tasks, ...rest }) => ({
       ...rest,
-      tasks: tasks.map(({ title }) => title),
+      source_type: rest.source_type ?? 'GENERATE',
+      tasks: buildPlanTaskTree(tasks),
     }));
-
-    return {
-      count: planFormatedList.length,
-      results: planFormatedList,
-    };
   }
 
   async getDetail({ userId, id }: IGetDetailProps) {
@@ -60,22 +52,20 @@ export class PlanService {
       },
       include: {
         tasks: {
-          select: {
-            title: true,
-          },
+          include: { events: { where: { is_active: true } } },
+          orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
         },
       },
-      omit: {
-        user_id: true,
-      },
     });
-    if (!plan) return 'Plan is not found!';
+    if (!plan)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
 
     const { tasks, ...restPlan } = plan;
 
     return {
       ...restPlan,
-      tasks: tasks.map(({ title }) => title),
+      source_type: restPlan.source_type ?? 'GENERATE',
+      tasks: buildPlanTaskTree(tasks),
     };
   }
 
@@ -192,7 +182,10 @@ export class PlanService {
       }
     }
 
-    await this.prisma.plan.update({ where: { id }, data: { is_paused: true, paused_at: new Date() } });
+    await this.prisma.plan.update({
+      where: { id },
+      data: { is_paused: true, paused_at: new Date() },
+    });
     return { message: 'Plan paused' };
   }
 
@@ -402,6 +395,33 @@ type SimpleTaskNode = {
   sequence_order: number;
   estimated_minutes: number | null;
   children: SimpleTaskNode[];
+};
+
+type TaskWithEvents = Task & {
+  events: import('@prisma/client').TaskEvent[];
+};
+
+type TaskTreeNode = Omit<TaskWithEvents, 'description'> & {
+  description: string;
+  children: TaskTreeNode[];
+};
+
+const buildPlanTaskTree = (tasks: TaskWithEvents[]): TaskTreeNode[] => {
+  const byParent = new Map<string | null, TaskWithEvents[]>();
+  for (const t of tasks) {
+    const key = t.parent_task_id;
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(t);
+  }
+  const build = (parentId: string | null): TaskTreeNode[] =>
+    (byParent.get(parentId) ?? [])
+      .sort((a, b) => a.sequence_order - b.sequence_order)
+      .map((t) => ({
+        ...t,
+        description: t.description ?? '',
+        children: build(t.id),
+      }));
+  return build(null);
 };
 
 const buildTaskTree = (

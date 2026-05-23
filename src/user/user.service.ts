@@ -24,11 +24,11 @@ export class UserService {
   }
 
   async getSettings(userId: string) {
-    const state = await this.prisma.userState.findUnique({
+    return this.prisma.userState.upsert({
       where: { user_id: userId },
+      update: {},
+      create: { user_id: userId },
     });
-    if (!state) throw new Error('UserState not found');
-    return state;
   }
 
   async updateSettings(userId: string, body: unknown) {

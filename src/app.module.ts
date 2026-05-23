@@ -18,7 +18,7 @@ import { UserModule } from './user/user.module';
       isGlobal: true,
     }),
     ScheduleModule.forRoot({}),
-    ThrottlerModule.forRoot([{ ttl: 3600000, limit: 10 }]),
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 120 }]),
     PrismaModule,
     OpenaiModule,
 
