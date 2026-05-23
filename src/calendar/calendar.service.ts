@@ -160,7 +160,9 @@ export class CalendarService {
     range,
   }: IGetCalendarRangeProps) {
     const user = await this.userService.getProfile(userId);
-    const calendarClient = getCalendarClient(user.refresh_token);
+    const calendarClient = getCalendarClient(
+      this.crypto.decrypt(user.refresh_token),
+    );
 
     const calendarList = await calendarClient.events.list({
       calendarId,

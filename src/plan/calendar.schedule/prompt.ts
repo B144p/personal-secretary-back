@@ -53,19 +53,21 @@ const developer = {
     - Only use future time slots
   `,
   executionStyle: `
+    ## TASK DURATION (CRITICAL)
+    - Each task MUST be scheduled for EXACTLY its estimated_minutes (tolerance ±10 min max)
+    - example: estimated_minutes=120 → end - start must be exactly 120 minutes
+    - NEVER schedule a task in less time than its estimated_minutes
+    - If the remaining time today is less than the task's estimated_minutes, move that task to the START of the next working day — do not compress it
+
     ## TASK EXECUTION STYLE
     - Prefer long, focused work blocks
-    - Minimum duration per block: {{minTaskDurationMin}} minutes
-    - A task must use its full required duration
-    - A task can span multiple time blocks or multiple days
+    - Minimum gap between blocks: {{minTaskDurationMin}} minutes
+    - Schedule tasks consecutively, with no idle gaps
 
-    ---
-
-    ## ANTI-DELAY RULE (VERY IMPORTANT)
-    - NEVER push tasks to future days if there is available time today
-    - NEVER leave earlier time unused while scheduling later time
-    - The correct behavior is ALWAYS:
-      → fill earliest available slot first
+    ## ANTI-DELAY RULE
+    - Fill the earliest available slot first
+    - Do not skip available working time without reason
+    - Exception: if a task does not fit in the remaining time today, move it to the next working day (do NOT compress its duration)
   `,
   workTime: `
     ## WORKING TIME

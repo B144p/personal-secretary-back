@@ -32,7 +32,9 @@ const patchSchema = (s: unknown): unknown => {
     if (Array.isArray(obj.prefixItems) && obj.prefixItems.length === 0) {
       return { type: 'array', items: { type: 'string' }, maxItems: 0 };
     }
-    return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, patchSchema(v)]));
+    return Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [k, patchSchema(v)]),
+    );
   }
   return s;
 };

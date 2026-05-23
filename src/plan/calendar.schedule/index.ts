@@ -237,6 +237,9 @@ const generateLeafSchedule = async ({
   const refMapData = mapToRefs(plan.tasks);
   const userConstraints = buildUserConstraints(userState);
 
+  const earliest = getEarliestScheduleTime(userState);
+  const scheduleAfter = earliest.toISOString();
+
   const callAI = (correctionMsg?: string) =>
     client.responses.parse({
       model: getModelForTask(AiTask.SCHEDULING),
@@ -261,6 +264,10 @@ const generateLeafSchedule = async ({
         {
           role: 'user',
           content: [
+            {
+              type: 'input_text' as const,
+              text: `#EARLIEST START TIME: ${scheduleAfter} (${earliest.format('YYYY-MM-DD HH:mm')} ${userState.time_zone}) — do not schedule any task before this moment.`,
+            },
             {
               type: 'input_text' as const,
               text: `#TASKS: ${JSON.stringify({ tasks: refMapData.mapped })}`,
@@ -317,6 +324,41 @@ const generateLeafSchedule = async ({
   };
 };
 
+const getEarliestScheduleTime = (state: UserState): dayjs.Dayjs => {
+  const now = dayjs().tz(state.time_zone).add(2, 'minute');
+  const [startHour, startMin = 0] = state.working_hours_start
+    .split(':')
+    .map(Number);
+  const [endHour] = state.working_hours_end.split(':').map(Number);
+
+  const todayStart = now
+    .startOf('day')
+    .hour(startHour)
+    .minute(startMin)
+    .second(0);
+  const todayEnd = now.startOf('day').hour(endHour).minute(0).second(0);
+
+  if (
+    now.isAfter(todayStart) &&
+    now.isBefore(todayEnd) &&
+    !state.days_off.includes(now.day())
+  ) {
+    return now;
+  }
+
+  // Current time is outside working hours — find next working day
+  let next = now
+    .startOf('day')
+    .add(1, 'day')
+    .hour(startHour)
+    .minute(startMin)
+    .second(0);
+  while (state.days_off.includes(next.day())) {
+    next = next.add(1, 'day');
+  }
+  return next;
+};
+
 const buildUserConstraints = (state: UserState) => `
 ## USER WORKING CONSTRAINTS
 - Timezone: '${state.time_zone}'
@@ -331,13 +373,15 @@ const validateSchedule = (
   userState: UserState,
 ): string | null => {
   const taskMap = Object.fromEntries(tasks.map((t) => [t.task_ref, t]));
-  const now = dayjs();
+  // Allow 3-minute grace period so API latency doesn't cause false failures
+  const earliest = dayjs().subtract(3, 'minute');
 
   for (const item of schedule) {
     const start = dayjs(item.start);
     const end = dayjs(item.end);
 
-    if (start.isBefore(now)) return `Task ${item.task_ref} starts in the past`;
+    if (start.isBefore(earliest))
+      return `Task ${item.task_ref} starts in the past`;
 
     const startLocal = start.tz(userState.time_zone);
     const endLocal = end.tz(userState.time_zone);
@@ -354,7 +398,8 @@ const validateSchedule = (
     const task = taskMap[item.task_ref];
     if (task?.estimated_minutes) {
       const durationMin = end.diff(start, 'minute');
-      if (Math.abs(durationMin - task.estimated_minutes) > 15) {
+      const tolerance = Math.max(15, task.estimated_minutes * 0.1);
+      if (Math.abs(durationMin - task.estimated_minutes) > tolerance) {
         return `Task ${item.task_ref} duration mismatch: expected ${task.estimated_minutes}m, got ${durationMin}m`;
       }
     }
