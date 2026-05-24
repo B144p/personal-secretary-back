@@ -69,13 +69,6 @@ const developer = {
     - Do not skip available working time without reason
     - Exception: if a task does not fit in the remaining time today, move it to the next working day (do NOT compress its duration)
   `,
-  workTime: `
-    ## WORKING TIME
-    - Timezone: 'Asia/Bangkok'
-    - Working days: [0, 1, 2, 3, 4, 5, 6]
-    - Working hours: 10 to 20
-    Only schedule within this range.
-  `,
   timeFormat: `
     ## TIME FORMAT
     - Use ISO 8601 format

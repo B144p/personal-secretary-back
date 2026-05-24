@@ -331,22 +331,19 @@ const getEarliestScheduleTime = (state: UserState): dayjs.Dayjs => {
     .map(Number);
   const [endHour] = state.working_hours_end.split(':').map(Number);
 
-  const todayStart = now
-    .startOf('day')
-    .hour(startHour)
-    .minute(startMin)
-    .second(0);
-  const todayEnd = now.startOf('day').hour(endHour).minute(0).second(0);
+  if (!state.days_off.includes(now.day())) {
+    const todayStart = now
+      .startOf('day')
+      .hour(startHour)
+      .minute(startMin)
+      .second(0);
+    const todayEnd = now.startOf('day').hour(endHour).minute(0).second(0);
 
-  if (
-    now.isAfter(todayStart) &&
-    now.isBefore(todayEnd) &&
-    !state.days_off.includes(now.day())
-  ) {
-    return now;
+    if (now.isBefore(todayStart)) return todayStart; // too early — wait for working hours today
+    if (now.isBefore(todayEnd)) return now; // within working hours — start now
   }
 
-  // Current time is outside working hours — find next working day
+  // After working hours or today is a day off — find next working day
   let next = now
     .startOf('day')
     .add(1, 'day')
