@@ -9,14 +9,15 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  google_id     String   @unique
-  email         String   @unique
+  id            String      @id @default(cuid())
+  google_id     String      @unique
+  email         String      @unique
   name          String?
   avatar_url    String?
   refresh_token String
-  created_at    DateTime @default(now()) @map("create_at")
-  updated_at    DateTime @updatedAt @map("update_at")
+  status        EUserStatus @default(PENDING)
+  created_at    DateTime    @default(now()) @map("create_at")
+  updated_at    DateTime    @updatedAt @map("update_at")
 
   user_state UserState?
   plan       Plan[]
@@ -149,6 +150,14 @@ model CategoryRuleKeywordTag {
 
   @@id([category_rule_id, tag_id])
   @@map("category_rule_keyword_tag")
+}
+
+enum EUserStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("e_user_status")
 }
 
 enum EEventCategory {
