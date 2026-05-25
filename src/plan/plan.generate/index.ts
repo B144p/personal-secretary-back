@@ -2,13 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import { calendar_v3 } from 'googleapis';
 import OpenAI from 'openai';
-import { ChatModel } from 'openai/resources';
+import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
+import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { z } from 'zod';
-import { generatePlanResponseSchema } from '../schemas';
+import {
+  generatePlanResponseSchema,
+  IGeneratePlanResponse,
+  ITaskNode,
+} from '../schemas';
 import type {
   IGeneratePlanProps,
   IGenerateTaskProps,
@@ -18,7 +23,25 @@ import type {
 } from './interface';
 import { generatePlanPrompt, reGeneratePlanPrompt } from './prompt';
 
-const CHAT_MODEL: ChatModel = 'gpt-5-nano';
+// z.toJSONSchema(z.tuple([])) emits prefixItems:[] which OpenAI rejects.
+// Walk the schema and replace empty-tuple nodes with a maxItems:0 array.
+const patchSchema = (s: unknown): unknown => {
+  if (Array.isArray(s)) return s.map(patchSchema);
+  if (s !== null && typeof s === 'object') {
+    const obj = s as Record<string, unknown>;
+    if (Array.isArray(obj.prefixItems) && obj.prefixItems.length === 0) {
+      return { type: 'array', items: { type: 'string' }, maxItems: 0 };
+    }
+    return Object.fromEntries(
+      Object.entries(obj).map(([k, v]) => [k, patchSchema(v)]),
+    );
+  }
+  return s;
+};
+
+const GENERATE_PLAN_JSON_SCHEMA = patchSchema(
+  z.toJSONSchema(generatePlanResponseSchema),
+) as Record<string, unknown>;
 
 @Injectable()
 export class GeneratePlanService {
@@ -30,98 +53,195 @@ export class GeneratePlanService {
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
-    const generatedPlan = await generateTask({
-      client: this.openai,
-      prompt,
-    });
+    const generatedPlan = await generateTask({ client: this.openai, prompt });
     const user = await this.userService.getProfile(userId);
     const createdPlan = await upsertPlan({
       user,
       client: this.prisma,
       plan: generatedPlan.output,
     });
-
     return createdPlan;
   }
 
-  async reGeneratePlan({ userId, earlierTask, data }: IReGeneratePlanProps) {
+  async reGeneratePlan({
+    userId: _userId,
+    preservedTasks,
+    parentTaskId,
+    data,
+  }: IReGeneratePlanProps) {
+    const plan = await this.prisma.plan.findUnique({ where: { id: data.id } });
+    const planTitle = plan?.title ?? '';
+
     const reGeneratedPlan = await reGenerateTask({
       client: this.openai,
       data: {
+        reason: data.reason,
         feedback: data.feedback,
-        earlierTask,
+        planTitle,
+        preservedTasks,
       },
     });
-    const user = await this.userService.getProfile(userId);
-    const upsertedPlan = await upsertPlan({
-      user,
+
+    // Insert the regenerated subtree under the correct parent
+    await insertTaskTree({
       client: this.prisma,
-      plan: reGeneratedPlan.output,
       planId: data.id,
+      tasks: reGeneratedPlan.output.tasks,
+      parentId: parentTaskId,
+      depth: parentTaskId
+        ? await getDepthForParent(this.prisma, parentTaskId)
+        : 0,
     });
 
-    // remove events related to the plan in calendar
+    return loadPlanWithTaskTree(this.prisma, data.id);
+  }
+
+  async removeRelatedCalendarEvent({
+    userId,
+    planId,
+  }: {
+    userId: string;
+    planId: string;
+  }) {
     const calendarClient = await this.calendarService.getClient(userId);
-    await removeRelatedCalendarEvent({
+    return await removeRelatedCalendarEvent({
       client: calendarClient,
       calendar: this.calendarService,
-      planId: data.id,
+      planId,
     });
-
-    return upsertedPlan;
   }
 }
+
+// ─── AI call ────────────────────────────────────────────────────────────────
 
 const generateTask = async ({
   client,
   prompt: { goal, more_info },
 }: IGenerateTaskProps) => {
-  const llmRes = await client.responses.parse({
-    model: CHAT_MODEL,
-    input: [
-      {
-        role: 'system',
-        content: Object.values(generatePlanPrompt.system).map((prompt) => ({
-          type: 'input_text',
-          text: prompt,
-        })),
+  const call = () =>
+    client.responses.parse({
+      model: getModelForTask(AiTask.PLAN_GENERATION),
+      input: [
+        {
+          role: 'system',
+          content: Object.values(generatePlanPrompt.system).map((text) => ({
+            type: 'input_text' as const,
+            text,
+          })),
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_text' as const,
+              text: `Generate task plan for: ${goal}`,
+            },
+            {
+              type: 'input_text' as const,
+              text: more_info ? `More info: ${more_info}` : '',
+            },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'plan',
+          strict: true,
+          schema: GENERATE_PLAN_JSON_SCHEMA,
+        },
       },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: `Generate task plan for: ${goal}`,
-          },
-          {
-            type: 'input_text',
-            text: more_info ? `More info: ${more_info}` : '',
-          },
-        ],
-      },
-    ],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'plan',
-        strict: true,
-        schema: z.toJSONSchema(generatePlanResponseSchema),
-      },
-    },
-  });
+    });
 
-  const outputParsed = validateOpenAIResponse(
+  let llmRes: Awaited<ReturnType<typeof call>>;
+  try {
+    llmRes = await call();
+  } catch (err) {
+    console.error('[generateTask] OpenAI call failed:', err);
+    throw err;
+  }
+  let outputParsed = validateOpenAIResponse(
     generatePlanResponseSchema,
     llmRes.output_parsed,
   );
 
-  return {
-    usage: llmRes.usage,
-    output: outputParsed,
-  };
+  if (exceedsMaxDepth(outputParsed.tasks, 0)) {
+    llmRes = await client.responses.parse({
+      model: getModelForTask(AiTask.PLAN_GENERATION),
+      input: [
+        {
+          role: 'system',
+          content: Object.values(generatePlanPrompt.system).map((text) => ({
+            type: 'input_text' as const,
+            text,
+          })),
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_text' as const,
+              text: `Generate task plan for: ${goal}`,
+            },
+            {
+              type: 'input_text' as const,
+              text: more_info ? `More info: ${more_info}` : '',
+            },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: JSON.stringify(outputParsed),
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_text' as const,
+              text: 'The previous response exceeded maximum depth of 4. Please flatten it so no task tree is deeper than 4 levels.',
+            },
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'plan',
+          strict: true,
+          schema: GENERATE_PLAN_JSON_SCHEMA,
+        },
+      },
+    });
+    outputParsed = validateOpenAIResponse(
+      generatePlanResponseSchema,
+      llmRes.output_parsed,
+    );
+
+    if (exceedsMaxDepth(outputParsed.tasks, 0)) {
+      throw new AppException(
+        AppErrorCode.AI_GENERATION_FAILED,
+        'Generated task tree exceeds maximum depth of 4 after retry',
+      );
+    }
+  }
+
+  return { usage: llmRes.usage, output: outputParsed };
 };
 
+const exceedsMaxDepth = (tasks: ITaskNode[], currentDepth: number): boolean => {
+  if (currentDepth > 4) return true;
+  return tasks.some(
+    (t) =>
+      t.children.length > 0 && exceedsMaxDepth(t.children, currentDepth + 1),
+  );
+};
+
+// ─── DB persist ─────────────────────────────────────────────────────────────
+
 const upsertPlan = async ({ user, client, plan, planId }: IUpsertPlanProps) => {
+  if (process.env.NODE_ENV === 'development') {
+    plan.goal = `[DEV] ${plan.goal}`;
+  }
   if (planId) return await updatePlan({ user, client, plan, planId });
   return await createPlan({ user, client, plan });
 };
@@ -131,37 +251,24 @@ const createPlan = async ({
   client,
   plan,
 }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan'>) => {
-  const { tasks, ...restCreatedPlan } = await client.plan.create({
+  const created = await client.plan.create({
     data: {
       user_id: user.id,
       title: plan.goal,
       source_type: EPlanSourceType.GENERATE,
       status: EPlanStatus.DRAFT,
-      tasks: {
-        createMany: {
-          data: plan.tasks.map((task) => ({
-            title: task,
-            status: ETaskStatus.PENDING,
-          })),
-        },
-      },
-    },
-    include: {
-      tasks: {
-        select: {
-          title: true,
-        },
-      },
-    },
-    omit: {
-      user_id: true,
     },
   });
 
-  return {
-    ...restCreatedPlan,
-    tasks: tasks.map(({ title }) => title),
-  };
+  await insertTaskTree({
+    client,
+    planId: created.id,
+    tasks: plan.tasks,
+    parentId: null,
+    depth: 0,
+  });
+
+  return loadPlanWithTaskTree(client, created.id);
 };
 
 const updatePlan = async ({
@@ -170,69 +277,133 @@ const updatePlan = async ({
   plan,
   planId,
 }: Pick<IUpsertPlanProps, 'user' | 'client' | 'plan' | 'planId'>) => {
-  // This phase: replace all existing tasks with re-generated tasks.
-  const { tasks, ...restCreatedPlan } = await client.plan.update({
-    where: {
-      id: planId,
-      user_id: user.id,
-    },
+  await client.plan.update({
+    where: { id: planId, user_id: user.id },
     data: {
       title: plan.goal,
       status: EPlanStatus.DRAFT,
-      tasks: {
-        deleteMany: {
-          plan_id: planId,
-        },
-        createMany: {
-          data: plan.tasks.map((task) => ({
-            title: task,
-            status: ETaskStatus.PENDING,
-          })),
-        },
-      },
-    },
-    include: {
-      tasks: {
-        select: {
-          title: true,
-        },
-      },
-    },
-    omit: {
-      user_id: true,
+      tasks: { deleteMany: { plan_id: planId as string } },
     },
   });
 
+  await insertTaskTree({
+    client,
+    planId: planId as string,
+    tasks: plan.tasks,
+    parentId: null,
+    depth: 0,
+  });
+
+  return loadPlanWithTaskTree(client, planId as string);
+};
+
+const loadPlanWithTaskTree = async (client: PrismaService, planId: string) => {
+  const plan = await client.plan.findUnique({
+    where: { id: planId },
+    include: {
+      tasks: {
+        include: { events: { where: { is_active: true } } },
+        orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
+      },
+    },
+  });
+  if (!plan) return null;
+  const { tasks, ...rest } = plan;
+  const byParent = new Map<string | null, (typeof tasks)[number][]>();
+  for (const t of tasks) {
+    const key = t.parent_task_id;
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(t);
+  }
+  const build = (parentId: string | null): unknown[] =>
+    (byParent.get(parentId) ?? [])
+      .sort((a, b) => a.sequence_order - b.sequence_order)
+      .map((t) => ({
+        ...t,
+        description: t.description ?? '',
+        children: build(t.id),
+      }));
   return {
-    ...restCreatedPlan,
-    tasks: tasks.map(({ title }) => title),
+    ...rest,
+    source_type: rest.source_type ?? 'GENERATE',
+    tasks: build(null),
   };
 };
 
+const insertTaskTree = async ({
+  client,
+  planId,
+  tasks,
+  parentId,
+  depth,
+}: {
+  client: PrismaService;
+  planId: string;
+  tasks: ITaskNode[];
+  parentId: string | null;
+  depth: number;
+}) => {
+  for (const task of tasks) {
+    const isLeaf = task.children.length === 0;
+    const created = await client.task.create({
+      data: {
+        plan_id: planId,
+        title: task.title,
+        description: task.description,
+        status: ETaskStatus.PENDING,
+        parent_task_id: parentId,
+        depth,
+        sequence_order: task.sequence_order,
+        estimated_minutes: isLeaf ? task.estimated_minutes : null,
+      },
+    });
+
+    if (task.children.length > 0) {
+      await insertTaskTree({
+        client,
+        planId,
+        tasks: task.children,
+        parentId: created.id,
+        depth: depth + 1,
+      });
+    }
+  }
+};
+
+// ─── Regenerate ──────────────────────────────────────────────────────────────
+
 const reGenerateTask = async ({
   client,
-  data: { feedback, earlierTask },
+  data: { reason, feedback, planTitle, preservedTasks },
 }: IReGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
-    model: CHAT_MODEL,
+    model: getModelForTask(AiTask.REGENERATION),
     input: [
       {
         role: 'system',
-        content: Object.values(reGeneratePlanPrompt.system).map((prompt) => ({
-          type: 'input_text',
-          text: prompt,
+        content: Object.values(reGeneratePlanPrompt.system).map((text) => ({
+          type: 'input_text' as const,
+          text,
         })),
       },
       {
         role: 'user',
         content: [
+          { type: 'input_text' as const, text: `Plan: ${planTitle}` },
           {
-            type: 'input_text',
-            text: `Existing Tasks: ${JSON.stringify(earlierTask)}`,
+            type: 'input_text' as const,
+            text: `Reason for regeneration: ${reason}`,
           },
           {
-            type: 'input_text',
-            text: `User Feedback: ${feedback ?? 'Nothing'}`,
+            type: 'input_text' as const,
+            text:
+              preservedTasks.length > 0
+                ? `Preserved tasks (already IN_PROGRESS or DONE — do not touch): ${JSON.stringify(preservedTasks)}`
+                : 'No preserved tasks.',
+          },
+          {
+            type: 'input_text' as const,
+            text: feedback ? `Additional feedback: ${feedback}` : '',
           },
         ],
       },
@@ -242,7 +413,7 @@ const reGenerateTask = async ({
         type: 'json_schema',
         name: 'plan',
         strict: true,
-        schema: z.toJSONSchema(generatePlanResponseSchema),
+        schema: GENERATE_PLAN_JSON_SCHEMA,
       },
     },
   });
@@ -251,12 +422,18 @@ const reGenerateTask = async ({
     generatePlanResponseSchema,
     llmRes.output_parsed,
   );
-
-  return {
-    usage: llmRes.usage,
-    output: outputParsed,
-  };
+  return { usage: llmRes.usage, output: outputParsed as IGeneratePlanResponse };
 };
+
+const getDepthForParent = async (client: PrismaService, parentId: string) => {
+  const parent = await client.task.findUnique({
+    where: { id: parentId },
+    select: { depth: true },
+  });
+  return (parent?.depth ?? 0) + 1;
+};
+
+// ─── Calendar cleanup ─────────────────────────────────────────────────────────
 
 const removeRelatedCalendarEvent = async ({
   client,
@@ -284,7 +461,5 @@ const removeRelatedCalendarEvent = async ({
     events: focusDeleteEventIds,
   });
 
-  return {
-    message: 'Related calendar events are removed successfully.',
-  };
+  return { message: 'Related calendar events are removed successfully.' };
 };

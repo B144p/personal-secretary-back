@@ -1,11 +1,8 @@
-import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { z } from 'zod';
 
-export class GeneratePlanDto {
-  @IsString()
-  @IsNotEmpty()
-  goal: string;
+export const generatePlanSchema = z.object({
+  goal: z.string().min(1),
+  more_info: z.string().optional(),
+});
 
-  @IsString()
-  @IsOptional()
-  more_info?: string;
-}
+export type GeneratePlanDto = z.infer<typeof generatePlanSchema>;

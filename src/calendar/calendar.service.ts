@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { EEventCategory } from '@prisma/client';
 import dayjs from 'dayjs';
 import pLimit from 'p-limit';
+import { CryptoService } from 'src/crypto/crypto.service';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -21,11 +22,13 @@ export class CalendarService {
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
     private readonly openAIService: OpenAIService,
+    private readonly crypto: CryptoService,
   ) {}
 
   async getClient(userId: string) {
     const user = await this.userService.getProfile(userId);
-    return getCalendarClient(user.refresh_token);
+    const plainToken = this.crypto.decrypt(user.refresh_token);
+    return getCalendarClient(plainToken);
   }
 
   async insertEvent({ userId, request }: IInsertEvent) {
@@ -142,9 +145,7 @@ export class CalendarService {
 
     const dataFormat =
       calendarList.data.items?.map(
-        ({ kind, etag, created, updated, ...rest }) => {
-          return rest;
-        },
+        ({ kind: _k, etag: _e, created: _c, updated: _u, ...rest }) => rest,
       ) ?? [];
 
     return {
@@ -159,7 +160,9 @@ export class CalendarService {
     range,
   }: IGetCalendarRangeProps) {
     const user = await this.userService.getProfile(userId);
-    const calendarClient = getCalendarClient(user.refresh_token);
+    const calendarClient = getCalendarClient(
+      this.crypto.decrypt(user.refresh_token),
+    );
 
     const calendarList = await calendarClient.events.list({
       calendarId,
@@ -212,7 +215,7 @@ interface IRuleBase {
   summary: string;
 }
 
-interface IEventPrivateProperties {
+export interface IEventPrivateProperties {
   plan_id?: string;
   task_id?: string;
 }

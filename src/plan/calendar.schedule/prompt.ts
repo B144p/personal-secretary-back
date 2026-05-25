@@ -34,8 +34,9 @@ const developer = {
     - DO NOT delay tasks without explicit reason
     - DO NOT insert unnecessary gaps between tasks
     - Tasks must be scheduled on consecutive time slots whenever possible
-    - You may reorder tasks freely
-    - You may omit tasks if necessary
+    - PRESERVE the given task order (T1 before T2 before T3, etc.) — the order represents logical dependencies
+    - You may only push a task to the next available day if it does not fit in today's remaining time; never skip ahead in the sequence
+    - You may omit tasks if truly necessary, but keep the relative order of remaining tasks
     - No overlapping time blocks
     - Respect user feedback when provided
   `,
@@ -53,30 +54,26 @@ const developer = {
     - Only use future time slots
   `,
   executionStyle: `
+    ## TASK DURATION (CRITICAL)
+    - Each task MUST be scheduled for EXACTLY its estimated_minutes (tolerance ±10 min max)
+    - example: estimated_minutes=120 → end - start must be exactly 120 minutes
+    - NEVER schedule a task in less time than its estimated_minutes
+    - If the remaining time today is less than the task's estimated_minutes, move that task to the START of the next working day — do not compress it
+
     ## TASK EXECUTION STYLE
     - Prefer long, focused work blocks
-    - A task must use its full required duration
-    - A task can span multiple time blocks or multiple days
+    - Minimum gap between blocks: {{minTaskDurationMin}} minutes
+    - Schedule tasks consecutively, with no idle gaps
 
-    ---
-
-    ## ANTI-DELAY RULE (VERY IMPORTANT)
-    - NEVER push tasks to future days if there is available time today
-    - NEVER leave earlier time unused while scheduling later time
-    - The correct behavior is ALWAYS:
-      → fill earliest available slot first
-  `,
-  workTime: `
-    ## WORKING TIME
-    - Timezone: 'Asia/Bangkok'
-    - Working days: [0, 1, 2, 3, 4, 5, 6]
-    - Working hours: 10 to 20
-    Only schedule within this range.
+    ## ANTI-DELAY RULE
+    - Fill the earliest available slot first
+    - Do not skip available working time without reason
+    - Exception: if a task does not fit in the remaining time today, move it to the next working day (do NOT compress its duration)
   `,
   timeFormat: `
     ## TIME FORMAT
-    - Use ISO 8601 format
-    - Example: 2026-02-03T09:00:00
+    - Use ISO 8601 format WITH timezone offset — never omit the offset
+    - Example: 2026-02-03T09:00:00+07:00
   `,
   // NOTE: also need update schema "generateScheduleResponseSchema"
   outputFormat: `

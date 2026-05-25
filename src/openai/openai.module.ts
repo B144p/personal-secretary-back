@@ -23,6 +23,6 @@ import { OpenAIService } from './openai.service';
     CalendarClassifierService,
     CalendarGeneratorService,
   ],
-  exports: [OpenAIService],
+  exports: [OpenAI, OpenAIService],
 })
 export class OpenaiModule {}

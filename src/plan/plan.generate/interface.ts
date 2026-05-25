@@ -3,7 +3,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { GeneratePlanDto } from '../dto/generate-plan.dto';
 import { ReGeneratePlanDto } from '../dto/re-generate-plan.dto';
-import { IGeneratePlanResponse } from '../schemas';
+import { IGeneratePlanResponse, ITaskNode } from '../schemas';
 
 export interface IGeneratePlanProps {
   userId: string;
@@ -24,19 +24,17 @@ export interface IUpsertPlanProps {
 
 export interface IReGeneratePlanProps {
   userId: string;
-  earlierTask: {
-    title: string;
-    tasks: Array<string>;
-  };
+  preservedTasks: ITaskNode[];
+  parentTaskId: string | null;
   data: ReGeneratePlanDto & { id: string };
 }
 
 export interface IReGenerateTaskProps {
   client: OpenAI;
-  data: ReGeneratePlanDto & {
-    earlierTask: {
-      title: string;
-      tasks: Array<string>;
-    };
+  data: {
+    reason: string;
+    feedback?: string;
+    planTitle: string;
+    preservedTasks: ITaskNode[];
   };
 }
