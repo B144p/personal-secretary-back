@@ -1,13 +1,14 @@
 import { Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
+import { ApprovedGuard } from 'src/common/guards/approved.guard';
 import { DevOnlyGuard } from 'src/common/guards/dev-only.guard';
 import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { TaskService } from './task.service';
 
 @Controller('task')
-@UseGuards(AuthGuard(JWT_STRATEGY_NAME), DevOnlyGuard)
+@UseGuards(AuthGuard(JWT_STRATEGY_NAME), ApprovedGuard, DevOnlyGuard)
 export class TaskController {
   constructor(private readonly taskService: TaskService) {}
 

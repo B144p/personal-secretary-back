@@ -26,8 +26,8 @@ export class CalendarService {
   ) {}
 
   async getClient(userId: string) {
-    const user = await this.userService.getProfile(userId);
-    const plainToken = this.crypto.decrypt(user.refresh_token);
+    const token = await this.userService.getRefreshToken(userId);
+    const plainToken = this.crypto.decrypt(token);
     return getCalendarClient(plainToken);
   }
 
@@ -159,10 +159,8 @@ export class CalendarService {
     calendarId = 'primary',
     range,
   }: IGetCalendarRangeProps) {
-    const user = await this.userService.getProfile(userId);
-    const calendarClient = getCalendarClient(
-      this.crypto.decrypt(user.refresh_token),
-    );
+    const token = await this.userService.getRefreshToken(userId);
+    const calendarClient = getCalendarClient(this.crypto.decrypt(token));
 
     const calendarList = await calendarClient.events.list({
       calendarId,
