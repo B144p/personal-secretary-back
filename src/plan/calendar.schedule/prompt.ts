@@ -34,8 +34,9 @@ const developer = {
     - DO NOT delay tasks without explicit reason
     - DO NOT insert unnecessary gaps between tasks
     - Tasks must be scheduled on consecutive time slots whenever possible
-    - You may reorder tasks freely
-    - You may omit tasks if necessary
+    - PRESERVE the given task order (T1 before T2 before T3, etc.) — the order represents logical dependencies
+    - You may only push a task to the next available day if it does not fit in today's remaining time; never skip ahead in the sequence
+    - You may omit tasks if truly necessary, but keep the relative order of remaining tasks
     - No overlapping time blocks
     - Respect user feedback when provided
   `,
@@ -71,8 +72,8 @@ const developer = {
   `,
   timeFormat: `
     ## TIME FORMAT
-    - Use ISO 8601 format
-    - Example: 2026-02-03T09:00:00
+    - Use ISO 8601 format WITH timezone offset — never omit the offset
+    - Example: 2026-02-03T09:00:00+07:00
   `,
   // NOTE: also need update schema "generateScheduleResponseSchema"
   outputFormat: `

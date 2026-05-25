@@ -197,26 +197,17 @@ export class PlanService {
       throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
     if (!plan.is_paused) return { message: 'Plan is not paused' };
 
+    if (plan.status === EPlanStatus.SCHEDULED) {
+      await this.calendarScheduleService.generateAndApplyTaskSchedule({
+        userId,
+        id,
+      });
+    }
+
     await this.prisma.plan.update({
       where: { id },
       data: { is_paused: false, paused_at: null },
     });
-
-    // If was SCHEDULED: re-run scheduling for incomplete leaves
-    if (plan.status === EPlanStatus.SCHEDULED) {
-      try {
-        await this.calendarScheduleService.generateAndApplyTaskSchedule({
-          userId,
-          id,
-        });
-      } catch {
-        // Return partial success — plan is unpaused even if scheduling fails
-        return {
-          message:
-            'Plan resumed; scheduling could not be restarted automatically',
-        };
-      }
-    }
 
     return { message: 'Plan resumed' };
   }

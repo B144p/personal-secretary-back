@@ -78,6 +78,7 @@ export class CalendarScheduleService {
       userId,
       planId: id,
       client: this.calendarService,
+      timeZone: userState.time_zone,
       data: generatedSchedule,
     });
 
@@ -123,17 +124,36 @@ export class CalendarScheduleService {
             depth: true,
             parent_task_id: true,
           },
-          orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
         },
       },
     });
     if (!plan) return null;
 
-    // Only schedule leaf tasks (no children)
+    type PlanTask = (typeof plan.tasks)[number];
     const parentIds = new Set(
       plan.tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
     );
-    const leaves = plan.tasks.filter((t) => !parentIds.has(t.id));
+
+    // DFS traversal so leaves come out in true tree order (parent sequence preserved)
+    const byParent = new Map<string | null, PlanTask[]>();
+    for (const t of plan.tasks) {
+      if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
+      byParent.get(t.parent_task_id)!.push(t);
+    }
+    const leaves: PlanTask[] = [];
+    const visit = (parentId: string | null) => {
+      const children = (byParent.get(parentId) ?? []).sort(
+        (a, b) => a.sequence_order - b.sequence_order,
+      );
+      for (const child of children) {
+        if (parentIds.has(child.id)) {
+          visit(child.id);
+        } else if (child.status === 'PENDING') {
+          leaves.push(child);
+        }
+      }
+    };
+    visit(null);
 
     return { id: plan.id, title: plan.title, tasks: leaves };
   }
@@ -238,7 +258,7 @@ const generateLeafSchedule = async ({
   const userConstraints = buildUserConstraints(userState);
 
   const earliest = getEarliestScheduleTime(userState);
-  const scheduleAfter = earliest.toISOString();
+  const scheduleAfter = earliest.format(); // preserves timezone offset (e.g. +07:00)
 
   const callAI = (correctionMsg?: string) =>
     client.responses.parse({
@@ -431,6 +451,7 @@ const applySchedule = async ({
   userId,
   planId,
   client,
+  timeZone,
   data,
 }: IScheduleEventToCalendar) => {
   const {
@@ -441,7 +462,13 @@ const applySchedule = async ({
     schedule.map((record) =>
       limit(() =>
         withRetry(() =>
-          insertCalendarEvent({ userId, planId, client, event: record }),
+          insertCalendarEvent({
+            userId,
+            planId,
+            client,
+            timeZone,
+            event: record,
+          }),
         ),
       ),
     ),
@@ -460,6 +487,7 @@ const applySchedule = async ({
 interface IScheduleEventToCalendar {
   planId: string;
   userId: string;
+  timeZone: string;
   client: CalendarService;
   data: Awaited<ReturnType<typeof generateLeafSchedule>>;
 }
@@ -468,6 +496,7 @@ const insertCalendarEvent = async ({
   userId,
   planId,
   client,
+  timeZone,
   event,
 }: IInsertCalendarEvent): Promise<string> => {
   const privateProperties = { plan_id: planId, task_id: event.id };
@@ -479,8 +508,8 @@ const insertCalendarEvent = async ({
         calendarId: 'primary',
         requestBody: {
           summary: event.title,
-          start: { dateTime: event.start },
-          end: { dateTime: event.end },
+          start: { dateTime: event.start, timeZone },
+          end: { dateTime: event.end, timeZone },
           extendedProperties: { private: privateProperties },
         },
       },
@@ -493,6 +522,9 @@ const insertCalendarEvent = async ({
 };
 
 interface IInsertCalendarEvent
-  extends Pick<IScheduleEventToCalendar, 'userId' | 'planId' | 'client'> {
+  extends Pick<
+    IScheduleEventToCalendar,
+    'userId' | 'planId' | 'client' | 'timeZone'
+  > {
   event: IScheduleEventToCalendar['data']['outputFormat']['schedule'][number];
 }
