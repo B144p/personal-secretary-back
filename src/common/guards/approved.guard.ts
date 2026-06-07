@@ -31,6 +31,7 @@ export class ApprovedGuard implements CanActivate {
       );
     }
 
+    // APPROVED and ADMIN both pass
     return true;
   }
 }

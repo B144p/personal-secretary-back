@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { getRequiredEnv } from 'src/utils';
 
 @Injectable()
 export class AdminService {
@@ -21,7 +20,21 @@ export class AdminService {
     });
   }
 
+  private async assertTargetNotAdmin(id: string) {
+    const target = await this.prisma.user.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    if (target?.status === 'ADMIN') {
+      throw new AppException(
+        AppErrorCode.CANNOT_MODIFY_ADMIN,
+        'Admin accounts cannot be modified from the UI.',
+      );
+    }
+  }
+
   async approveUser(id: string) {
+    await this.assertTargetNotAdmin(id);
     await this.prisma.user.update({
       where: { id },
       data: { status: 'APPROVED' },
@@ -30,19 +43,7 @@ export class AdminService {
   }
 
   async rejectUser(id: string) {
-    const adminEmail = getRequiredEnv('ADMIN_EMAIL');
-    const target = await this.prisma.user.findUnique({
-      where: { id },
-      select: { email: true },
-    });
-
-    if (target?.email === adminEmail) {
-      throw new AppException(
-        AppErrorCode.CANNOT_REJECT_ADMIN,
-        'The admin account cannot be rejected.',
-      );
-    }
-
+    await this.assertTargetNotAdmin(id);
     await this.prisma.user.update({
       where: { id },
       data: { status: 'REJECTED' },

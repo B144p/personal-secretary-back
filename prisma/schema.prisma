@@ -156,6 +156,7 @@ enum EUserStatus {
   PENDING
   APPROVED
   REJECTED
+  ADMIN
 
   @@map("e_user_status")
 }
