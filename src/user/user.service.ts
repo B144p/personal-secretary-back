@@ -13,7 +13,14 @@ export class UserService {
   async getProfile(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      include: {
+      select: {
+        id: true,
+        google_id: true,
+        email: true,
+        name: true,
+        avatar_url: true,
+        status: true,
+        created_at: true,
         user_state: true,
       },
     });
@@ -21,6 +28,15 @@ export class UserService {
       throw new Error('User not found');
     }
     return user;
+  }
+
+  async getRefreshToken(id: string): Promise<string> {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { refresh_token: true },
+    });
+    if (!user) throw new Error('User not found');
+    return user.refresh_token;
   }
 
   async getSettings(userId: string) {
