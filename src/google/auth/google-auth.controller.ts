@@ -10,7 +10,6 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Request, Response } from 'express';
-import { DevOnlyGuard } from 'src/common/guards/dev-only.guard';
 import {
   GOOGLE_AUTH_CALLBACK_PATH,
   GOOGLE_AUTH_PREFIX,
@@ -52,13 +51,5 @@ export class GoogleAuthController {
   @HttpCode(HttpStatus.NO_CONTENT)
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie(JWT_COOKIE_NAME);
-  }
-
-  @Post('delete')
-  @UseGuards(DevOnlyGuard)
-  deleteUser(@Req() req: Request & { body: { refresh_token: string } }) {
-    return this.googleAuthService.userDelete(
-      (req.body as { refresh_token: string }).refresh_token,
-    );
   }
 }

@@ -4,7 +4,6 @@ import { User } from '@prisma/client';
 import { CryptoService } from 'src/crypto/crypto.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { IJwtSignData } from 'src/utils';
-import { CreateOAuthClient, getGoogleProfile } from './google-auth.client';
 import { IGoogleValidateUser } from './strategies/google.strategy';
 
 @Injectable()
@@ -50,18 +49,5 @@ export class GoogleAuthService {
   googleSignJwt(user: User) {
     const jwtSignData: IJwtSignData = { sub: user.id, email: user.email };
     return this.jwtService.sign(jwtSignData);
-  }
-
-  // TODO: Remove on production
-  async userDelete(refresh_token: string): Promise<unknown> {
-    const client = CreateOAuthClient();
-    client.setCredentials({ refresh_token });
-    const profile = await getGoogleProfile(client);
-
-    if (!profile.id) throw new Error('Profile not found');
-
-    await client.revokeToken(refresh_token);
-    await this.prisma.user.delete({ where: { google_id: profile.id } });
-    return 'User already deleted';
   }
 }
