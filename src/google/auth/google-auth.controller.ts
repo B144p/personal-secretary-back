@@ -20,7 +20,6 @@ import { IGoogleValidateUser } from './strategies/google.strategy';
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:3001';
 const JWT_COOKIE_NAME = 'jwt';
-const JWT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 @Controller(GOOGLE_AUTH_PREFIX)
 export class GoogleAuthController {
@@ -37,14 +36,7 @@ export class GoogleAuthController {
       req.user as IGoogleValidateUser,
     );
 
-    res.cookie(JWT_COOKIE_NAME, jwt, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: JWT_MAX_AGE_MS,
-    });
-
-    return res.redirect(`${FRONTEND_ORIGIN}/plans`);
+    return res.redirect(`${FRONTEND_ORIGIN}/auth/callback?token=${jwt}`);
   }
 
   @Post('logout')
