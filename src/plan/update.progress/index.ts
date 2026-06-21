@@ -102,7 +102,7 @@ export class UpdateProgressService {
     await this.prisma.dailyFeedback.create({
       data: {
         plan_id: plan.id,
-        date: dayjs().tz(userState.time_zone).format('YYYY-MM-DD'),
+        date: dayjs().tz(userState.time_zone).startOf('day').toDate(),
         status_changes:
           statusChanges as unknown as import('@prisma/client').Prisma.InputJsonValue,
         context_text: contextText,
