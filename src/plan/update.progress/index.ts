@@ -205,6 +205,7 @@ export class UpdateProgressService {
       const mappedTasks = remainingLeaves.map((t) => ({
         id: t.id,
         title: t.title,
+        description: t.description,
         estimated_minutes: t.estimated_minutes,
         status: t.status,
         sequence_order: t.sequence_order,
@@ -237,6 +238,7 @@ export class UpdateProgressService {
                 userId,
                 planId: plan.id,
                 client: this.calendarService,
+                timeZone: userState.time_zone,
                 event: item,
               }),
             ),
@@ -419,6 +421,7 @@ const rescheduleLeaves = async ({
   tasks: Array<{
     id: string;
     title: string;
+    description: string | null;
     estimated_minutes: number | null;
     status: string;
     sequence_order: number;
@@ -427,10 +430,10 @@ const rescheduleLeaves = async ({
   userState: UserState;
   contextText?: string;
 }) => {
-  const refMap: Record<string, string> = {};
+  const refMap: Record<string, (typeof tasks)[number]> = {};
   const mappedTasks = tasks.map((t, i) => {
     const ref = `T${i + 1}`;
-    refMap[ref] = t.id;
+    refMap[ref] = t;
     return {
       task_ref: ref,
       title: t.title,
@@ -496,23 +499,36 @@ const rescheduleLeaves = async ({
     generateScheduleResponseSchema,
     llmRes.output_parsed,
   );
-  return schedule.map(({ task_ref, ...rest }) => ({
-    ...rest,
-    taskId: refMap[task_ref],
-    task_ref,
-  }));
+  return schedule.map(({ task_ref, ...rest }) => {
+    const task = refMap[task_ref];
+    return {
+      ...rest,
+      taskId: task?.id,
+      title: task?.title,
+      description: task?.description,
+      task_ref,
+    };
+  });
 };
 
 const insertCalendarEvent = async ({
   userId,
   planId,
   client,
+  timeZone,
   event,
 }: {
   userId: string;
   planId: string;
   client: CalendarService;
-  event: { taskId?: string; title?: string; start: string; end: string };
+  timeZone: string;
+  event: {
+    taskId?: string;
+    title?: string;
+    description?: string | null;
+    start: string;
+    end: string;
+  };
 }): Promise<string> => {
   const createdEvent = await client.insertEvent({
     userId,
@@ -521,8 +537,9 @@ const insertCalendarEvent = async ({
         calendarId: 'primary',
         requestBody: {
           summary: event.title ?? '',
-          start: { dateTime: event.start },
-          end: { dateTime: event.end },
+          description: event.description ?? undefined,
+          start: { dateTime: event.start, timeZone },
+          end: { dateTime: event.end, timeZone },
           extendedProperties: {
             private: { plan_id: planId, task_id: event.taskId ?? '' },
           },
