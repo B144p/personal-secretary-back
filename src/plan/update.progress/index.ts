@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EPlanStatus, ETaskStatus, UserState } from '@prisma/client';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
@@ -27,6 +27,8 @@ const limit = pLimit(2);
 
 @Injectable()
 export class UpdateProgressService {
+  private readonly logger = new Logger(UpdateProgressService.name);
+
   constructor(
     private readonly openai: OpenAI,
     private readonly prisma: PrismaService,
@@ -68,13 +70,21 @@ export class UpdateProgressService {
     });
     if (!userState) throw new Error('UserState not found');
 
-    // 1. Reconcile calendar: absorb any manual moves of our events
-    await reconcileCalendarMoves({
-      userId,
-      plan,
-      calendarService: this.calendarService,
-      prisma: this.prisma,
-    });
+    // 1. Reconcile calendar: absorb any manual moves of our events (best-effort —
+    // a calendar hiccup must not block saving the user's status changes)
+    try {
+      await reconcileCalendarMoves({
+        userId,
+        plan,
+        calendarService: this.calendarService,
+        prisma: this.prisma,
+      });
+    } catch (err) {
+      this.logger.error(
+        'Failed to reconcile calendar moves',
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
 
     // 2. Apply status changes
     if (statusChanges.length > 0) {
@@ -92,7 +102,7 @@ export class UpdateProgressService {
     await this.prisma.dailyFeedback.create({
       data: {
         plan_id: plan.id,
-        date: dayjs().tz(userState.time_zone).format('YYYY-MM-DD'),
+        date: dayjs().tz(userState.time_zone).startOf('day').toDate(),
         status_changes:
           statusChanges as unknown as import('@prisma/client').Prisma.InputJsonValue,
         context_text: contextText,
@@ -111,12 +121,55 @@ export class UpdateProgressService {
     if (!updatedPlan) throw new Error('Plan disappeared');
 
     const allTasks = updatedPlan.tasks;
-
-    // 5. Check if all leaves are DONE → mark plan DONE
     const leafIds = getLeafIds(allTasks);
-    const allLeavesDone = allTasks
-      .filter((t) => leafIds.has(t.id))
-      .every((t) => t.status === ETaskStatus.DONE);
+    const now = dayjs();
+
+    // 4a. Held leaves are deprioritized: drop their future calendar event (if
+    // any) and exclude them from scheduling below. Past events are left
+    // untouched as a historical record. Best-effort — must run even if this
+    // request has no other reschedule-worthy change.
+    const heldLeavesWithFutureEvents = allTasks.filter((t) => {
+      if (!leafIds.has(t.id)) return false;
+      if (t.status !== ETaskStatus.HOLD) return false;
+      const activeEvent = t.events[0];
+      if (!activeEvent) return false;
+      return dayjs(activeEvent.end).isAfter(now);
+    });
+
+    if (heldLeavesWithFutureEvents.length > 0) {
+      try {
+        const calClient = await this.calendarService.getClient(userId);
+        const eventIds = heldLeavesWithFutureEvents.flatMap((t) =>
+          t.events.map((e) => e.google_event_id),
+        );
+        await this.calendarService.removeEvents({
+          client: calClient,
+          events: eventIds,
+        });
+        await this.prisma.taskEvent.updateMany({
+          where: {
+            task_id: { in: heldLeavesWithFutureEvents.map((t) => t.id) },
+            is_active: true,
+          },
+          data: { is_active: false },
+        });
+      } catch (err) {
+        this.logger.warn(
+          'Failed to clean up calendar event(s) for held task(s)',
+          err instanceof Error ? err.stack : String(err),
+        );
+      }
+    }
+
+    // 5. Check if all non-held leaves are DONE → mark plan DONE. Held leaves
+    // are skipped for completion purposes; an all-held plan stays stalled
+    // rather than auto-completing.
+    const nonHeldLeaves = allTasks.filter(
+      (t) => leafIds.has(t.id) && t.status !== ETaskStatus.HOLD,
+    );
+    const allLeavesDone =
+      nonHeldLeaves.length > 0 &&
+      nonHeldLeaves.every((t) => t.status === ETaskStatus.DONE);
 
     if (allLeavesDone) {
       await this.prisma.plan.update({
@@ -131,16 +184,31 @@ export class UpdateProgressService {
     }
 
     // 6. Identify slipped leaf tasks: PENDING or IN_PROGRESS with active event end in the past
-    const now = dayjs();
     const slippedLeaves = allTasks.filter((t) => {
       if (!leafIds.has(t.id)) return false;
       if (t.status === ETaskStatus.DONE) return false;
+      if (t.status === ETaskStatus.HOLD) return false;
       const activeEvent = t.events[0];
       if (!activeEvent) return false;
       return dayjs(activeEvent.end).isBefore(now);
     });
 
-    if (slippedLeaves.length === 0) {
+    // 6a. Identify leaves completed early in THIS request: just marked DONE,
+    // but their active event hasn't ended yet — finished ahead of schedule
+    const completedTaskIds = new Set(
+      statusChanges
+        .filter((sc) => sc.newStatus === ETaskStatus.DONE)
+        .map((sc) => sc.taskId),
+    );
+    const completedEarly = allTasks.filter((t) => {
+      if (!leafIds.has(t.id)) return false;
+      if (!completedTaskIds.has(t.id)) return false;
+      const activeEvent = t.events[0];
+      if (!activeEvent) return false;
+      return dayjs(activeEvent.end).isAfter(now);
+    });
+
+    if (slippedLeaves.length === 0 && completedEarly.length === 0) {
       return {
         rescheduled: 0,
         planStatus: EPlanStatus.SCHEDULED,
@@ -148,83 +216,162 @@ export class UpdateProgressService {
       };
     }
 
-    // 7. Re-schedule slipped + remaining unscheduled leaves
+    // 7. Re-schedule slipped + remaining unscheduled leaves. Triggering this
+    // on early completion (not just overdue) lets the scheduler — which
+    // already packs tasks ASAP — pull the remaining plan forward.
     const remainingLeaves = allTasks.filter(
-      (t) => leafIds.has(t.id) && t.status !== ETaskStatus.DONE,
+      (t) =>
+        leafIds.has(t.id) &&
+        t.status !== ETaskStatus.DONE &&
+        t.status !== ETaskStatus.HOLD,
     );
 
-    const calendarEvents = await getCalendarRange({
-      userId,
-      calendarService: this.calendarService,
-    });
+    let rescheduledCount = 0;
+    let unscheduledTaskIds: string[] = remainingLeaves.map((t) => t.id);
+    let rescheduleFailed = false;
 
-    const mappedTasks = remainingLeaves.map((t) => ({
-      id: t.id,
-      title: t.title,
-      estimated_minutes: t.estimated_minutes,
-      status: t.status,
-      sequence_order: t.sequence_order,
-    }));
+    // Slipped IN_PROGRESS tasks already represent real work done — keep
+    // their past event as a record instead of deleting it; they still get
+    // a fresh continuation block below like any other remaining leaf.
+    const inProgressSlippedIds = new Set(
+      slippedLeaves
+        .filter((t) => t.status === ETaskStatus.IN_PROGRESS)
+        .map((t) => t.id),
+    );
 
-    const newSchedule = await rescheduleLeaves({
-      client: this.openai,
-      tasks: mappedTasks,
-      calendar: calendarEvents,
-      userState,
-      contextText,
-    });
+    // Old Google event id(s) per task, captured before they get swapped out
+    // below — used to delete the stale event once the task is rescheduled.
+    const oldEventIdsByTask = new Map<string, string[]>(
+      remainingLeaves
+        .filter((t) => !inProgressSlippedIds.has(t.id))
+        .map((t) => [t.id, t.events.map((e) => e.google_event_id)]),
+    );
 
-    // 8. Apply new schedule: create Google events, update TaskEvents
-    const rescheduled: string[] = [];
-    const unscheduledTaskIds: string[] = [];
+    // Best-effort: the status changes above are already committed, so a
+    // calendar/AI failure here must not turn into a 500 for the caller.
+    try {
+      const calendarEvents = await getCalendarRange({
+        userId,
+        planId: plan.id,
+        calendarService: this.calendarService,
+      });
 
-    for (const item of newSchedule) {
-      const taskId = item.taskId;
-      if (!taskId) {
-        unscheduledTaskIds.push(String(item.task_ref));
-        continue;
+      const mappedTasks = remainingLeaves.map((t) => ({
+        id: t.id,
+        title: t.title,
+        description: t.description,
+        estimated_minutes: t.estimated_minutes,
+        status: t.status,
+        sequence_order: t.sequence_order,
+      }));
+
+      const newSchedule = await rescheduleLeaves({
+        client: this.openai,
+        tasks: mappedTasks,
+        calendar: calendarEvents,
+        userState,
+        contextText,
+      });
+
+      // 8. Apply new schedule: create Google events, update TaskEvents
+      const rescheduled: string[] = [];
+      const failedTaskIds: string[] = [];
+      const calClient = await this.calendarService.getClient(userId);
+
+      for (const item of newSchedule) {
+        const taskId = item.taskId;
+        if (!taskId) {
+          failedTaskIds.push(String(item.task_ref));
+          continue;
+        }
+
+        try {
+          const googleEventId = await withRetry(() =>
+            limit(() =>
+              insertCalendarEvent({
+                userId,
+                planId: plan.id,
+                client: this.calendarService,
+                timeZone: userState.time_zone,
+                event: item,
+              }),
+            ),
+          );
+
+          await this.prisma.$transaction([
+            // Deactivate old event
+            this.prisma.taskEvent.updateMany({
+              where: { task_id: taskId, is_active: true },
+              data: { is_active: false },
+            }),
+            // Create new active event
+            this.prisma.taskEvent.create({
+              data: {
+                task_id: taskId,
+                google_event_id: googleEventId,
+                start: new Date(item.start),
+                end: new Date(item.end),
+                is_active: true,
+              },
+            }),
+          ]);
+
+          rescheduled.push(taskId);
+
+          // Clean up the stale event now that the task has a new active one.
+          const oldEventIds = oldEventIdsByTask.get(taskId);
+          if (oldEventIds && oldEventIds.length > 0) {
+            try {
+              await this.calendarService.removeEvents({
+                client: calClient,
+                events: oldEventIds,
+              });
+            } catch (err) {
+              this.logger.warn(
+                `Failed to delete stale calendar event(s) for task ${taskId}`,
+                err instanceof Error ? err.stack : String(err),
+              );
+            }
+          }
+        } catch {
+          failedTaskIds.push(taskId);
+        }
       }
 
+      rescheduledCount = rescheduled.length;
+      unscheduledTaskIds = failedTaskIds;
+    } catch (err) {
+      this.logger.error(
+        'Failed to reschedule remaining tasks after status update',
+        err instanceof Error ? err.stack : String(err),
+      );
+      rescheduleFailed = true;
+    }
+
+    // 9. Record a marker event for tasks finished ahead of schedule. The
+    // original scheduled event is left untouched; best-effort like above.
+    if (completedEarly.length > 0) {
       try {
-        const googleEventId = await withRetry(() =>
-          limit(() =>
-            insertCalendarEvent({
-              userId,
-              planId: plan.id,
-              client: this.calendarService,
-              event: item,
-            }),
-          ),
+        await createDoneMarkerEvents({
+          userId,
+          planId: plan.id,
+          tasks: completedEarly,
+          userState,
+          calendarService: this.calendarService,
+        });
+      } catch (err) {
+        this.logger.error(
+          'Failed to create done-marker calendar events',
+          err instanceof Error ? err.stack : String(err),
         );
-
-        await this.prisma.$transaction([
-          // Deactivate old event
-          this.prisma.taskEvent.updateMany({
-            where: { task_id: taskId, is_active: true },
-            data: { is_active: false },
-          }),
-          // Create new active event
-          this.prisma.taskEvent.create({
-            data: {
-              task_id: taskId,
-              google_event_id: googleEventId,
-              start: new Date(item.start),
-              end: new Date(item.end),
-              is_active: true,
-            },
-          }),
-        ]);
-
-        rescheduled.push(taskId);
-      } catch {
-        unscheduledTaskIds.push(taskId);
       }
     }
 
     return {
-      rescheduled: rescheduled.length,
+      rescheduled: rescheduledCount,
       planStatus: EPlanStatus.SCHEDULED,
       unscheduledTaskIds,
+      ...(rescheduleFailed ? { rescheduleFailed: true } : {}),
     };
   }
 }
@@ -273,7 +420,9 @@ const reconcileCalendarMoves = async ({
   for (const task of plan.tasks) {
     for (const ev of task.events) {
       const cal = calMap[ev.google_event_id];
-      if (!cal) continue;
+      // Skip all-day or otherwise non-timed events (empty dateTime) — they
+      // would otherwise produce an Invalid Date and fail the DB update
+      if (!cal || !cal.start || !cal.end) continue;
       await prisma.taskEvent.update({
         where: { id: ev.id },
         data: { start: new Date(cal.start), end: new Date(cal.end) },
@@ -284,9 +433,11 @@ const reconcileCalendarMoves = async ({
 
 const getCalendarRange = async ({
   userId,
+  planId,
   calendarService,
 }: {
   userId: string;
+  planId: string;
   calendarService: CalendarService;
 }) => {
   const { results } = await calendarService.getCalendarRange({
@@ -297,15 +448,19 @@ const getCalendarRange = async ({
     },
   });
   return {
-    results: results.map(
-      ({ extendedProperties, summary, start, end, description }) => ({
+    // Exclude this plan's own events from the AI's busy-list so it can
+    // freely repack the plan's remaining leaves into the earliest slots.
+    results: results
+      .filter(({ extendedProperties }) => {
+        return extendedProperties?.private?.plan_id !== planId;
+      })
+      .map(({ extendedProperties, summary, start, end, description }) => ({
         extendedProperties,
         summary,
         start,
         end,
         description,
-      }),
-    ),
+      })),
   };
 };
 
@@ -320,6 +475,7 @@ const rescheduleLeaves = async ({
   tasks: Array<{
     id: string;
     title: string;
+    description: string | null;
     estimated_minutes: number | null;
     status: string;
     sequence_order: number;
@@ -328,10 +484,10 @@ const rescheduleLeaves = async ({
   userState: UserState;
   contextText?: string;
 }) => {
-  const refMap: Record<string, string> = {};
+  const refMap: Record<string, (typeof tasks)[number]> = {};
   const mappedTasks = tasks.map((t, i) => {
     const ref = `T${i + 1}`;
-    refMap[ref] = t.id;
+    refMap[ref] = t;
     return {
       task_ref: ref,
       title: t.title,
@@ -397,23 +553,36 @@ const rescheduleLeaves = async ({
     generateScheduleResponseSchema,
     llmRes.output_parsed,
   );
-  return schedule.map(({ task_ref, ...rest }) => ({
-    ...rest,
-    taskId: refMap[task_ref],
-    task_ref,
-  }));
+  return schedule.map(({ task_ref, ...rest }) => {
+    const task = refMap[task_ref];
+    return {
+      ...rest,
+      taskId: task?.id,
+      title: task?.title,
+      description: task?.description,
+      task_ref,
+    };
+  });
 };
 
 const insertCalendarEvent = async ({
   userId,
   planId,
   client,
+  timeZone,
   event,
 }: {
   userId: string;
   planId: string;
   client: CalendarService;
-  event: { taskId?: string; title?: string; start: string; end: string };
+  timeZone: string;
+  event: {
+    taskId?: string;
+    title?: string;
+    description?: string | null;
+    start: string;
+    end: string;
+  };
 }): Promise<string> => {
   const createdEvent = await client.insertEvent({
     userId,
@@ -422,8 +591,9 @@ const insertCalendarEvent = async ({
         calendarId: 'primary',
         requestBody: {
           summary: event.title ?? '',
-          start: { dateTime: event.start },
-          end: { dateTime: event.end },
+          description: event.description ?? undefined,
+          start: { dateTime: event.start, timeZone },
+          end: { dateTime: event.end, timeZone },
           extendedProperties: {
             private: { plan_id: planId, task_id: event.taskId ?? '' },
           },
@@ -434,4 +604,73 @@ const insertCalendarEvent = async ({
   if (!createdEvent.id)
     throw new Error('Google Calendar did not return event id');
   return createdEvent.id;
+};
+
+// Records work finished ahead of schedule as a marker event, stacked after
+// working hours on the day it was actually completed. The originally
+// scheduled event for the task is left untouched.
+const createDoneMarkerEvents = async ({
+  userId,
+  planId,
+  tasks,
+  userState,
+  calendarService,
+}: {
+  userId: string;
+  planId: string;
+  tasks: Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    estimated_minutes: number | null;
+  }>;
+  userState: UserState;
+  calendarService: CalendarService;
+}) => {
+  const [endHour, endMinute] = userState.working_hours_end
+    .split(':')
+    .map(Number);
+  let cursor = dayjs()
+    .tz(userState.time_zone)
+    .hour(endHour)
+    .minute(endMinute)
+    .second(0)
+    .millisecond(0);
+
+  for (const task of tasks) {
+    const durationMinutes = task.estimated_minutes ?? 30;
+    const start = cursor;
+    const end = cursor.add(durationMinutes, 'minute');
+
+    await withRetry(() =>
+      limit(() =>
+        calendarService.insertEvent({
+          userId,
+          request: {
+            params: {
+              calendarId: 'primary',
+              requestBody: {
+                summary: task.title,
+                description: task.description ?? undefined,
+                start: {
+                  dateTime: start.format(),
+                  timeZone: userState.time_zone,
+                },
+                end: { dateTime: end.format(), timeZone: userState.time_zone },
+                extendedProperties: {
+                  private: {
+                    plan_id: planId,
+                    task_id: task.id,
+                    done_marker: 'true',
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    cursor = end;
+  }
 };

@@ -153,13 +153,7 @@ const generateTask = async ({
       },
     });
 
-  let llmRes: Awaited<ReturnType<typeof call>>;
-  try {
-    llmRes = await call();
-  } catch (err) {
-    console.error('[generateTask] OpenAI call failed:', err);
-    throw err;
-  }
+  let llmRes: Awaited<ReturnType<typeof call>> = await call();
   let outputParsed = validateOpenAIResponse(
     generatePlanResponseSchema,
     llmRes.output_parsed,

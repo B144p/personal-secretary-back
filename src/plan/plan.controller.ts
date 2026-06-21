@@ -160,7 +160,7 @@ export class PlanProgressController {
       data: body as {
         statusChanges?: Array<{
           taskId: string;
-          newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE';
+          newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'HOLD';
         }>;
         contextText?: string;
       },
