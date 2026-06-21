@@ -230,13 +230,21 @@ export class UpdateProgressService {
     let unscheduledTaskIds: string[] = remainingLeaves.map((t) => t.id);
     let rescheduleFailed = false;
 
+    // Slipped IN_PROGRESS tasks already represent real work done — keep
+    // their past event as a record instead of deleting it; they still get
+    // a fresh continuation block below like any other remaining leaf.
+    const inProgressSlippedIds = new Set(
+      slippedLeaves
+        .filter((t) => t.status === ETaskStatus.IN_PROGRESS)
+        .map((t) => t.id),
+    );
+
     // Old Google event id(s) per task, captured before they get swapped out
     // below — used to delete the stale event once the task is rescheduled.
     const oldEventIdsByTask = new Map<string, string[]>(
-      remainingLeaves.map((t) => [
-        t.id,
-        t.events.map((e) => e.google_event_id),
-      ]),
+      remainingLeaves
+        .filter((t) => !inProgressSlippedIds.has(t.id))
+        .map((t) => [t.id, t.events.map((e) => e.google_event_id)]),
     );
 
     // Best-effort: the status changes above are already committed, so a
