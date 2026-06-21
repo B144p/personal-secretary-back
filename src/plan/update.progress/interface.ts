@@ -2,7 +2,7 @@ export type IGetCurrentScheduleProps = IUserReq & {};
 
 export interface IStatusChange {
   taskId: string;
-  newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE';
+  newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'HOLD';
 }
 
 export interface IUpdateProgressProps extends IUserReq {

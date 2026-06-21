@@ -121,12 +121,55 @@ export class UpdateProgressService {
     if (!updatedPlan) throw new Error('Plan disappeared');
 
     const allTasks = updatedPlan.tasks;
-
-    // 5. Check if all leaves are DONE → mark plan DONE
     const leafIds = getLeafIds(allTasks);
-    const allLeavesDone = allTasks
-      .filter((t) => leafIds.has(t.id))
-      .every((t) => t.status === ETaskStatus.DONE);
+    const now = dayjs();
+
+    // 4a. Held leaves are deprioritized: drop their future calendar event (if
+    // any) and exclude them from scheduling below. Past events are left
+    // untouched as a historical record. Best-effort — must run even if this
+    // request has no other reschedule-worthy change.
+    const heldLeavesWithFutureEvents = allTasks.filter((t) => {
+      if (!leafIds.has(t.id)) return false;
+      if (t.status !== ETaskStatus.HOLD) return false;
+      const activeEvent = t.events[0];
+      if (!activeEvent) return false;
+      return dayjs(activeEvent.end).isAfter(now);
+    });
+
+    if (heldLeavesWithFutureEvents.length > 0) {
+      try {
+        const calClient = await this.calendarService.getClient(userId);
+        const eventIds = heldLeavesWithFutureEvents.flatMap((t) =>
+          t.events.map((e) => e.google_event_id),
+        );
+        await this.calendarService.removeEvents({
+          client: calClient,
+          events: eventIds,
+        });
+        await this.prisma.taskEvent.updateMany({
+          where: {
+            task_id: { in: heldLeavesWithFutureEvents.map((t) => t.id) },
+            is_active: true,
+          },
+          data: { is_active: false },
+        });
+      } catch (err) {
+        this.logger.warn(
+          'Failed to clean up calendar event(s) for held task(s)',
+          err instanceof Error ? err.stack : String(err),
+        );
+      }
+    }
+
+    // 5. Check if all non-held leaves are DONE → mark plan DONE. Held leaves
+    // are skipped for completion purposes; an all-held plan stays stalled
+    // rather than auto-completing.
+    const nonHeldLeaves = allTasks.filter(
+      (t) => leafIds.has(t.id) && t.status !== ETaskStatus.HOLD,
+    );
+    const allLeavesDone =
+      nonHeldLeaves.length > 0 &&
+      nonHeldLeaves.every((t) => t.status === ETaskStatus.DONE);
 
     if (allLeavesDone) {
       await this.prisma.plan.update({
@@ -141,10 +184,10 @@ export class UpdateProgressService {
     }
 
     // 6. Identify slipped leaf tasks: PENDING or IN_PROGRESS with active event end in the past
-    const now = dayjs();
     const slippedLeaves = allTasks.filter((t) => {
       if (!leafIds.has(t.id)) return false;
       if (t.status === ETaskStatus.DONE) return false;
+      if (t.status === ETaskStatus.HOLD) return false;
       const activeEvent = t.events[0];
       if (!activeEvent) return false;
       return dayjs(activeEvent.end).isBefore(now);
@@ -177,7 +220,10 @@ export class UpdateProgressService {
     // on early completion (not just overdue) lets the scheduler — which
     // already packs tasks ASAP — pull the remaining plan forward.
     const remainingLeaves = allTasks.filter(
-      (t) => leafIds.has(t.id) && t.status !== ETaskStatus.DONE,
+      (t) =>
+        leafIds.has(t.id) &&
+        t.status !== ETaskStatus.DONE &&
+        t.status !== ETaskStatus.HOLD,
     );
 
     let rescheduledCount = 0;
