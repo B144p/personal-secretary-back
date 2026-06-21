@@ -184,11 +184,21 @@ export class UpdateProgressService {
     let unscheduledTaskIds: string[] = remainingLeaves.map((t) => t.id);
     let rescheduleFailed = false;
 
+    // Old Google event id(s) per task, captured before they get swapped out
+    // below — used to delete the stale event once the task is rescheduled.
+    const oldEventIdsByTask = new Map<string, string[]>(
+      remainingLeaves.map((t) => [
+        t.id,
+        t.events.map((e) => e.google_event_id),
+      ]),
+    );
+
     // Best-effort: the status changes above are already committed, so a
     // calendar/AI failure here must not turn into a 500 for the caller.
     try {
       const calendarEvents = await getCalendarRange({
         userId,
+        planId: plan.id,
         calendarService: this.calendarService,
       });
 
@@ -211,6 +221,7 @@ export class UpdateProgressService {
       // 8. Apply new schedule: create Google events, update TaskEvents
       const rescheduled: string[] = [];
       const failedTaskIds: string[] = [];
+      const calClient = await this.calendarService.getClient(userId);
 
       for (const item of newSchedule) {
         const taskId = item.taskId;
@@ -250,6 +261,22 @@ export class UpdateProgressService {
           ]);
 
           rescheduled.push(taskId);
+
+          // Clean up the stale event now that the task has a new active one.
+          const oldEventIds = oldEventIdsByTask.get(taskId);
+          if (oldEventIds && oldEventIds.length > 0) {
+            try {
+              await this.calendarService.removeEvents({
+                client: calClient,
+                events: oldEventIds,
+              });
+            } catch (err) {
+              this.logger.warn(
+                `Failed to delete stale calendar event(s) for task ${taskId}`,
+                err instanceof Error ? err.stack : String(err),
+              );
+            }
+          }
         } catch {
           failedTaskIds.push(taskId);
         }
@@ -350,9 +377,11 @@ const reconcileCalendarMoves = async ({
 
 const getCalendarRange = async ({
   userId,
+  planId,
   calendarService,
 }: {
   userId: string;
+  planId: string;
   calendarService: CalendarService;
 }) => {
   const { results } = await calendarService.getCalendarRange({
@@ -363,15 +392,19 @@ const getCalendarRange = async ({
     },
   });
   return {
-    results: results.map(
-      ({ extendedProperties, summary, start, end, description }) => ({
+    // Exclude this plan's own events from the AI's busy-list so it can
+    // freely repack the plan's remaining leaves into the earliest slots.
+    results: results
+      .filter(({ extendedProperties }) => {
+        return extendedProperties?.private?.plan_id !== planId;
+      })
+      .map(({ extendedProperties, summary, start, end, description }) => ({
         extendedProperties,
         summary,
         start,
         end,
         description,
-      }),
-    ),
+      })),
   };
 };
 
