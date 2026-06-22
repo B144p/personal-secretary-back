@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { ALLOWED_AI_MODELS } from 'src/openai/models';
+import {
+  UpdateAiModelsDto,
+  updateAiModelsSchema,
+} from './dto/update-ai-models.dto';
 import {
   UpdateSettingsDto,
   updateSettingsSchema,
@@ -94,5 +99,30 @@ export class UserService {
         special_days: dto.special_days ?? undefined,
       },
     });
+  }
+
+  async getAiSettings(userId: string) {
+    const aiSetting = await this.prisma.aiSetting.upsert({
+      where: { user_id: userId },
+      update: {},
+      create: { user_id: userId },
+    });
+    return { ...aiSetting, available_models: ALLOWED_AI_MODELS };
+  }
+
+  async updateAiModels(userId: string, body: unknown) {
+    const parsed = updateAiModelsSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.message);
+    }
+
+    const dto: UpdateAiModelsDto = parsed.data;
+    await this.getAiSettings(userId);
+
+    const aiSetting = await this.prisma.aiSetting.update({
+      where: { user_id: userId },
+      data: dto,
+    });
+    return { ...aiSetting, available_models: ALLOWED_AI_MODELS };
   }
 }

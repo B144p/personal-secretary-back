@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { IAiTaskModels } from 'src/openai/ai-task';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { GeneratePlanDto } from '../dto/generate-plan.dto';
@@ -12,6 +13,7 @@ export interface IGeneratePlanProps {
 
 export interface IGenerateTaskProps {
   client: OpenAI;
+  models: IAiTaskModels;
   prompt: GeneratePlanDto;
 }
 
@@ -31,6 +33,7 @@ export interface IReGeneratePlanProps {
 
 export interface IReGenerateTaskProps {
   client: OpenAI;
+  models: IAiTaskModels;
   data: {
     reason: string;
     feedback?: string;

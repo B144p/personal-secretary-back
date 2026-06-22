@@ -20,6 +20,7 @@ model User {
   updated_at    DateTime    @updatedAt @map("update_at")
 
   user_state UserState?
+  ai_setting AiSetting?
   plan       Plan[]
 
   @@map("user")
@@ -39,6 +40,19 @@ model UserState {
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@map("user_state")
+}
+
+model AiSetting {
+  id      String @id @default(cuid())
+  user_id String @unique
+
+  model_plan_generation String @default("gpt-5")
+  model_regeneration    String @default("gpt-5")
+  model_scheduling      String @default("gpt-5-nano")
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("ai_setting")
 }
 
 model Plan {
@@ -76,14 +90,14 @@ model DailyFeedback {
 }
 
 model Task {
-  id               String      @id @default(uuid())
-  plan_id          String
-  parent_task_id   String?
-  title            String
-  description      String?
-  status           ETaskStatus @default(PENDING)
-  depth            Int         @default(0)
-  sequence_order   Int         @default(0)
+  id                String      @id @default(uuid())
+  plan_id           String
+  parent_task_id    String?
+  title             String
+  description       String?
+  status            ETaskStatus @default(PENDING)
+  depth             Int         @default(0)
+  sequence_order    Int         @default(0)
   estimated_minutes Int?
 
   created_at DateTime @default(now()) @map("create_at")

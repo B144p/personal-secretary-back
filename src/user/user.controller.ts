@@ -31,4 +31,18 @@ export class UserController {
     const { sub } = req.user as IJwtSignData;
     return this.userService.updateSettings(sub, body);
   }
+
+  @Get('ai-settings')
+  @UseGuards(ApprovedGuard)
+  getAiSettings(@Req() req: Request) {
+    const { sub } = req.user as IJwtSignData;
+    return this.userService.getAiSettings(sub);
+  }
+
+  @Put('ai-settings/models')
+  @UseGuards(ApprovedGuard)
+  updateAiModels(@Req() req: Request, @Body() body: unknown) {
+    const { sub } = req.user as IJwtSignData;
+    return this.userService.updateAiModels(sub, body);
+  }
 }

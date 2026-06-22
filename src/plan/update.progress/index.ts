@@ -5,11 +5,12 @@ import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
 import OpenAI from 'openai';
 import pLimit from 'p-limit';
-import { AiTask, getModelForTask } from 'src/openai/ai-task';
+import { AiTask, getModelForTask, IAiTaskModels } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { UserService } from 'src/user/user.service';
 import { withRetry } from 'src/utils';
 import { z } from 'zod';
 import { generateScheduleResponseSchema } from '../schemas';
@@ -34,6 +35,7 @@ export class UpdateProgressService {
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
     private readonly calendarScheduleService: CalendarScheduleService,
+    private readonly userService: UserService,
   ) {}
 
   async getCurrentSchedule({ userId }: IGetCurrentScheduleProps) {
@@ -265,8 +267,10 @@ export class UpdateProgressService {
         sequence_order: t.sequence_order,
       }));
 
+      const models = await this.userService.getAiSettings(userId);
       const newSchedule = await rescheduleLeaves({
         client: this.openai,
+        models,
         tasks: mappedTasks,
         calendar: calendarEvents,
         userState,
@@ -466,12 +470,14 @@ const getCalendarRange = async ({
 
 const rescheduleLeaves = async ({
   client,
+  models,
   tasks,
   calendar,
   userState,
   contextText,
 }: {
   client: OpenAI;
+  models: IAiTaskModels;
   tasks: Array<{
     id: string;
     title: string;
@@ -503,7 +509,7 @@ const rescheduleLeaves = async ({
 `;
 
   const llmRes = await client.responses.parse({
-    model: getModelForTask(AiTask.SCHEDULING),
+    model: getModelForTask(AiTask.SCHEDULING, models),
     input: [
       {
         role: 'system',

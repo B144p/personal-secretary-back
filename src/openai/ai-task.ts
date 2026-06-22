@@ -4,14 +4,19 @@ export enum AiTask {
   REGENERATION = 'REGENERATION',
 }
 
-export function getModelForTask(task: AiTask): string {
-  const planModel = process.env.OPENAI_MODEL_PLAN_GENERATION ?? 'gpt-5';
+export interface IAiTaskModels {
+  model_plan_generation: string;
+  model_regeneration: string;
+  model_scheduling: string;
+}
+
+export function getModelForTask(task: AiTask, models: IAiTaskModels): string {
   switch (task) {
     case AiTask.PLAN_GENERATION:
-      return planModel;
+      return models.model_plan_generation;
     case AiTask.SCHEDULING:
-      return process.env.OPENAI_MODEL_SCHEDULING ?? 'gpt-5-nano';
+      return models.model_scheduling;
     case AiTask.REGENERATION:
-      return process.env.OPENAI_MODEL_REGENERATION ?? planModel;
+      return models.model_regeneration;
   }
 }

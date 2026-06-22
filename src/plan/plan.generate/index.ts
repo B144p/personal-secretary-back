@@ -53,7 +53,12 @@ export class GeneratePlanService {
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
-    const generatedPlan = await generateTask({ client: this.openai, prompt });
+    const models = await this.userService.getAiSettings(userId);
+    const generatedPlan = await generateTask({
+      client: this.openai,
+      models,
+      prompt,
+    });
     const user = await this.userService.getProfile(userId);
     const createdPlan = await upsertPlan({
       user,
@@ -64,16 +69,18 @@ export class GeneratePlanService {
   }
 
   async reGeneratePlan({
-    userId: _userId,
+    userId,
     preservedTasks,
     parentTaskId,
     data,
   }: IReGeneratePlanProps) {
     const plan = await this.prisma.plan.findUnique({ where: { id: data.id } });
     const planTitle = plan?.title ?? '';
+    const models = await this.userService.getAiSettings(userId);
 
     const reGeneratedPlan = await reGenerateTask({
       client: this.openai,
+      models,
       data: {
         reason: data.reason,
         feedback: data.feedback,
@@ -116,11 +123,12 @@ export class GeneratePlanService {
 
 const generateTask = async ({
   client,
+  models,
   prompt: { goal, more_info },
 }: IGenerateTaskProps) => {
   const call = () =>
     client.responses.parse({
-      model: getModelForTask(AiTask.PLAN_GENERATION),
+      model: getModelForTask(AiTask.PLAN_GENERATION, models),
       input: [
         {
           role: 'system',
@@ -161,7 +169,7 @@ const generateTask = async ({
 
   if (exceedsMaxDepth(outputParsed.tasks, 0)) {
     llmRes = await client.responses.parse({
-      model: getModelForTask(AiTask.PLAN_GENERATION),
+      model: getModelForTask(AiTask.PLAN_GENERATION, models),
       input: [
         {
           role: 'system',
@@ -368,10 +376,11 @@ const insertTaskTree = async ({
 
 const reGenerateTask = async ({
   client,
+  models,
   data: { reason, feedback, planTitle, preservedTasks },
 }: IReGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
-    model: getModelForTask(AiTask.REGENERATION),
+    model: getModelForTask(AiTask.REGENERATION, models),
     input: [
       {
         role: 'system',
