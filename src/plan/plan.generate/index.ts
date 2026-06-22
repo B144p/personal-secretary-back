@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import { calendar_v3 } from 'googleapis';
-import OpenAI from 'openai';
 import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -46,19 +46,16 @@ const GENERATE_PLAN_JSON_SCHEMA = patchSchema(
 @Injectable()
 export class GeneratePlanService {
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
     private readonly calendarService: CalendarService,
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
-    const models = await this.userService.getAiSettings(userId);
-    const generatedPlan = await generateTask({
-      client: this.openai,
-      models,
-      prompt,
-    });
+    const client = await this.openaiFactory.forUser(userId);
+    const models = await this.userService.getAiModels(userId);
+    const generatedPlan = await generateTask({ client, models, prompt });
     const user = await this.userService.getProfile(userId);
     const createdPlan = await upsertPlan({
       user,
@@ -76,10 +73,11 @@ export class GeneratePlanService {
   }: IReGeneratePlanProps) {
     const plan = await this.prisma.plan.findUnique({ where: { id: data.id } });
     const planTitle = plan?.title ?? '';
-    const models = await this.userService.getAiSettings(userId);
+    const client = await this.openaiFactory.forUser(userId);
+    const models = await this.userService.getAiModels(userId);
 
     const reGeneratedPlan = await reGenerateTask({
-      client: this.openai,
+      client,
       models,
       data: {
         reason: data.reason,

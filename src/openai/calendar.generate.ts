@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
 import { z } from 'zod';
 import { CalendarClassifierService } from './calendar.classifier';
+import { OpenAIClientFactory } from './openai-client.factory';
 import { CalendarGeneratorSchema } from './schemas';
 import { validateOpenAIResponse } from './utils';
 
@@ -12,25 +13,27 @@ const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 @Injectable()
 export class CalendarGeneratorService {
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly calendarClassifierService: CalendarClassifierService,
   ) {}
 
-  async calendarGenerator(amount: number = 10) {
+  async calendarGenerator(userId: string, amount: number = 10) {
+    const client = await this.openaiFactory.forUser(userId);
     const { usage, outputFormat } = await summaryGenerator({
-      client: this.openai,
+      client,
       amount,
     });
 
     return { usage, outputFormat };
   }
 
-  async categoryRuleGenerator() {
+  async categoryRuleGenerator(userId: string) {
     const promiseData = await Promise.all(
       Array.from({ length: 10 }, async () => {
-        const { outputFormat } = await this.calendarGenerator(100);
+        const { outputFormat } = await this.calendarGenerator(userId, 100);
 
         return await this.calendarClassifierService.classifyEvent(
+          userId,
           outputFormat.results,
         );
       }),

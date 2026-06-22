@@ -45,4 +45,11 @@ export class UserController {
     const { sub } = req.user as IJwtSignData;
     return this.userService.updateAiModels(sub, body);
   }
+
+  @Put('ai-settings/api-key')
+  @UseGuards(ApprovedGuard)
+  updateApiKey(@Req() req: Request, @Body() body: unknown) {
+    const { sub } = req.user as IJwtSignData;
+    return this.userService.updateApiKey(sub, body);
+  }
 }

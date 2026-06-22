@@ -45,15 +45,18 @@ export class CalendarService {
     return createdEvent.data;
   }
 
-  classifyRules() {
-    return this.openAIService.classifyRules(categorizeMockup.eventSummary);
+  classifyRules(userId: string) {
+    return this.openAIService.classifyRules(
+      userId,
+      categorizeMockup.eventSummary,
+    );
   }
 
-  generateCalendarRule() {
-    return this.openAIService.generateCategoryRules();
+  generateCalendarRule(userId: string) {
+    return this.openAIService.generateCategoryRules(userId);
   }
 
-  async classifyEvent(events: string[]): Promise<unknown> {
+  async classifyEvent(userId: string, events: string[]): Promise<unknown> {
     const categoryRule = await this.prisma.categoryRule.findMany({
       select: { id: true, keyword: true, category: true },
     });
@@ -97,6 +100,7 @@ export class CalendarService {
     const classifyAIEvent =
       categorizedEvent.unClassify.length > 0
         ? await this.openAIService.classifyRules(
+            userId,
             categorizedEvent.unClassify.map(({ summary }) => summary),
           )
         : { results: [], count: 0 };

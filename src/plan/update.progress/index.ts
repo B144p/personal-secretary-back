@@ -8,6 +8,7 @@ import pLimit from 'p-limit';
 import { AiTask, getModelForTask, IAiTaskModels } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -31,7 +32,7 @@ export class UpdateProgressService {
   private readonly logger = new Logger(UpdateProgressService.name);
 
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
     private readonly calendarScheduleService: CalendarScheduleService,
@@ -267,9 +268,10 @@ export class UpdateProgressService {
         sequence_order: t.sequence_order,
       }));
 
-      const models = await this.userService.getAiSettings(userId);
+      const client = await this.openaiFactory.forUser(userId);
+      const models = await this.userService.getAiModels(userId);
       const newSchedule = await rescheduleLeaves({
-        client: this.openai,
+        client,
         models,
         tasks: mappedTasks,
         calendar: calendarEvents,

@@ -18,17 +18,21 @@ export class TaskController {
   }
 
   @Post('calendar/categorize')
-  categorizeCalendarEvent() {
-    return this.taskService.categorizeCalendarEvent();
+  categorizeCalendarEvent(@Req() req: Request) {
+    return this.taskService.categorizeCalendarEvent(
+      validateJwtPayload(req.user).sub,
+    );
   }
 
   @Post('openAI')
-  classifyRules() {
-    return this.taskService.classifyRules();
+  classifyRules(@Req() req: Request) {
+    return this.taskService.classifyRules(validateJwtPayload(req.user).sub);
   }
 
   @Post('calendar/generate_rule')
-  generateCalendarRule() {
-    return this.taskService.generateCalendarRule();
+  generateCalendarRule(@Req() req: Request) {
+    return this.taskService.generateCalendarRule(
+      validateJwtPayload(req.user).sub,
+    );
   }
 }

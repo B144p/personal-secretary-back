@@ -8,6 +8,7 @@ import pLimit from 'p-limit';
 import { AiTask, getModelForTask, IAiTaskModels } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -28,7 +29,7 @@ const limit = pLimit(2);
 @Injectable()
 export class CalendarScheduleService {
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
     private readonly userService: UserService,
@@ -69,9 +70,10 @@ export class CalendarScheduleService {
       range,
     });
 
-    const models = await this.userService.getAiSettings(userId);
+    const client = await this.openaiFactory.forUser(userId);
+    const models = await this.userService.getAiModels(userId);
     const generatedSchedule = await generateLeafSchedule({
-      client: this.openai,
+      client,
       models,
       calendar: calendarEvents,
       plan,

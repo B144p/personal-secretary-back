@@ -46,9 +46,10 @@ model AiSetting {
   id      String @id @default(cuid())
   user_id String @unique
 
-  model_plan_generation String @default("gpt-5")
-  model_regeneration    String @default("gpt-5")
-  model_scheduling      String @default("gpt-5-nano")
+  model_plan_generation String  @default("gpt-5")
+  model_regeneration    String  @default("gpt-5")
+  model_scheduling      String  @default("gpt-5-nano")
+  api_key_encrypted     String?
 
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 

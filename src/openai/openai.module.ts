@@ -1,28 +1,20 @@
 import { Global, Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import OpenAI from 'openai';
+import { CryptoModule } from 'src/crypto/crypto.module';
 import { UserModule } from 'src/user/user.module';
 import { CalendarClassifierService } from './calendar.classifier';
 import { CalendarGeneratorService } from './calendar.generate';
+import { OpenAIClientFactory } from './openai-client.factory';
 import { OpenAIService } from './openai.service';
 
 @Global()
 @Module({
-  imports: [ConfigModule, UserModule],
+  imports: [CryptoModule, UserModule],
   providers: [
-    {
-      provide: OpenAI,
-      inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        return new OpenAI({
-          apiKey: configService.get<string>('OPENAI_API_KEY'),
-        });
-      },
-    },
+    OpenAIClientFactory,
     OpenAIService,
     CalendarClassifierService,
     CalendarGeneratorService,
   ],
-  exports: [OpenAI, OpenAIService],
+  exports: [OpenAIClientFactory, OpenAIService],
 })
 export class OpenaiModule {}
