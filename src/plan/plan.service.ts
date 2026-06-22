@@ -354,7 +354,105 @@ export class PlanService {
   ) {
     return await this.generatePlanService.removeRelatedCalendarEvent(data);
   }
+
+  async createTask({
+    userId,
+    planId,
+    body,
+  }: {
+    userId: string;
+    planId: string;
+    body: unknown;
+  }) {
+    const { createTaskSchema } = await import('./dto/create-task.dto');
+    const parsed = createTaskSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AppException(
+        AppErrorCode.INVALID_GOAL,
+        parsed.error.issues[0]?.message ?? 'Invalid body',
+      );
+    }
+
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: planId, user_id: userId },
+    });
+    if (!plan) throw new NotFoundException('Plan not found');
+    if (plan.status !== EPlanStatus.DRAFT) {
+      throw new AppException(
+        AppErrorCode.PLAN_NOT_EDITABLE,
+        'Only DRAFT plans can be edited',
+      );
+    }
+
+    const { parent_task_id, sequence_order, ...rest } = parsed.data;
+
+    let depth = 0;
+    if (parent_task_id) {
+      const parent = await this.prisma.task.findUnique({
+        where: { id: parent_task_id, plan_id: planId },
+      });
+      if (!parent) throw new NotFoundException('Parent task not found');
+      depth = parent.depth + 1;
+    }
+
+    if (depth > MAX_TASK_DEPTH) {
+      throw new AppException(
+        AppErrorCode.INVALID_GOAL,
+        'Task nesting too deep',
+      );
+    }
+
+    const finalSequenceOrder =
+      sequence_order ??
+      (await this.prisma.task.count({
+        where: { plan_id: planId, parent_task_id: parent_task_id ?? null },
+      }));
+
+    return this.prisma.task.create({
+      data: {
+        ...rest,
+        plan_id: planId,
+        parent_task_id: parent_task_id ?? null,
+        depth,
+        sequence_order: finalSequenceOrder,
+      },
+    });
+  }
+
+  async deleteTask({
+    userId,
+    planId,
+    taskId,
+  }: {
+    userId: string;
+    planId: string;
+    taskId: string;
+  }) {
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: planId, user_id: userId },
+      include: { tasks: true },
+    });
+    if (!plan) throw new NotFoundException('Plan not found');
+    if (plan.status !== EPlanStatus.DRAFT) {
+      throw new AppException(
+        AppErrorCode.PLAN_NOT_EDITABLE,
+        'Only DRAFT plans can be edited',
+      );
+    }
+
+    const task = plan.tasks.find((t) => t.id === taskId);
+    if (!task) throw new NotFoundException('Task not found');
+
+    const idsToDelete = collectSubtreeIds(plan.tasks, taskId);
+    await this.prisma.task.deleteMany({
+      where: { id: { in: [...idsToDelete] } },
+    });
+
+    return { message: 'Task deleted', deletedCount: idsToDelete.size };
+  }
 }
+
+const MAX_TASK_DEPTH = 4;
 
 const getLeafIds = (tasks: { id: string; parent_task_id: string | null }[]) => {
   const parentSet = new Set(

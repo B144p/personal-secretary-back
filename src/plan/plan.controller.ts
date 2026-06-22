@@ -53,6 +53,19 @@ export class PlanController {
     });
   }
 
+  @Post(':planId/tasks')
+  createTask(
+    @Req() req: Request,
+    @Param('planId') planId: string,
+    @Body() body: unknown,
+  ) {
+    return this.planService.createTask({
+      userId: validateJwtPayload(req.user).sub,
+      planId,
+      body,
+    });
+  }
+
   @Patch(':planId/tasks/:taskId')
   updateTask(
     @Req() req: Request,
@@ -65,6 +78,19 @@ export class PlanController {
       planId,
       taskId,
       body,
+    });
+  }
+
+  @Delete(':planId/tasks/:taskId')
+  deleteTask(
+    @Req() req: Request,
+    @Param('planId') planId: string,
+    @Param('taskId') taskId: string,
+  ) {
+    return this.planService.deleteTask({
+      userId: validateJwtPayload(req.user).sub,
+      planId,
+      taskId,
     });
   }
 
