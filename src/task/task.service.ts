@@ -27,15 +27,18 @@ export class TaskService {
     return this.calendarService.getCalendarList(userId);
   }
 
-  categorizeCalendarEvent() {
-    return this.calendarService.classifyEvent(categorizeMockup.eventSummary);
+  categorizeCalendarEvent(userId: string) {
+    return this.calendarService.classifyEvent(
+      userId,
+      categorizeMockup.eventSummary,
+    );
   }
 
-  classifyRules() {
-    return this.calendarService.classifyRules();
+  classifyRules(userId: string) {
+    return this.calendarService.classifyRules(userId);
   }
 
-  generateCalendarRule() {
-    return this.calendarService.generateCalendarRule();
+  generateCalendarRule(userId: string) {
+    return this.calendarService.generateCalendarRule(userId);
   }
 }

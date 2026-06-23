@@ -7,6 +7,8 @@ import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { TaskService } from './task.service';
 
+// NOTE: Dev-only debug tooling for calendar category-rule generation/classification —
+// NOTE: out of v1 scope (requirements/2026-05-16.md §2.2, T16); DevOnlyGuard 404s every route here in production.
 @Controller('task')
 @UseGuards(AuthGuard(JWT_STRATEGY_NAME), ApprovedGuard, DevOnlyGuard)
 export class TaskController {
@@ -18,17 +20,21 @@ export class TaskController {
   }
 
   @Post('calendar/categorize')
-  categorizeCalendarEvent() {
-    return this.taskService.categorizeCalendarEvent();
+  categorizeCalendarEvent(@Req() req: Request) {
+    return this.taskService.categorizeCalendarEvent(
+      validateJwtPayload(req.user).sub,
+    );
   }
 
   @Post('openAI')
-  classifyRules() {
-    return this.taskService.classifyRules();
+  classifyRules(@Req() req: Request) {
+    return this.taskService.classifyRules(validateJwtPayload(req.user).sub);
   }
 
   @Post('calendar/generate_rule')
-  generateCalendarRule() {
-    return this.taskService.generateCalendarRule();
+  generateCalendarRule(@Req() req: Request) {
+    return this.taskService.generateCalendarRule(
+      validateJwtPayload(req.user).sub,
+    );
   }
 }

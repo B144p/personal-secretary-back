@@ -14,11 +14,16 @@ export class OpenAIService {
     private readonly calendarGenerator: CalendarGeneratorService,
   ) {}
 
-  async classifyRules(summaries: string[]) {
-    return await this.calendarClassifierService.classifyEvent(summaries);
+  async classifyRules(userId: string, summaries: string[]) {
+    return await this.calendarClassifierService.classifyEvent(
+      userId,
+      summaries,
+    );
   }
 
-  async generateCategoryRules(): Promise<IGenerateCalendarResponse> {
-    return await this.calendarGenerator.categoryRuleGenerator();
+  async generateCategoryRules(
+    userId: string,
+  ): Promise<IGenerateCalendarResponse> {
+    return await this.calendarGenerator.categoryRuleGenerator(userId);
   }
 }

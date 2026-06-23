@@ -19,6 +19,8 @@ export const AppErrorCode = {
   AI_GENERATION_FAILED: 'AI_GENERATION_FAILED',
   SCHEDULING_INFEASIBLE: 'SCHEDULING_INFEASIBLE',
   GOOGLE_CALENDAR_ERROR: 'GOOGLE_CALENDAR_ERROR',
+  AI_KEY_NOT_CONFIGURED: 'AI_KEY_NOT_CONFIGURED',
+  INVALID_API_KEY: 'INVALID_API_KEY',
 } as const;
 
 export type AppErrorCodeType = (typeof AppErrorCode)[keyof typeof AppErrorCode];
@@ -42,6 +44,8 @@ const statusMap: Record<AppErrorCodeType, HttpStatus> = {
   AI_GENERATION_FAILED: HttpStatus.BAD_GATEWAY,
   SCHEDULING_INFEASIBLE: HttpStatus.UNPROCESSABLE_ENTITY,
   GOOGLE_CALENDAR_ERROR: HttpStatus.BAD_GATEWAY,
+  AI_KEY_NOT_CONFIGURED: HttpStatus.BAD_REQUEST,
+  INVALID_API_KEY: HttpStatus.BAD_REQUEST,
 };
 
 export class AppException extends HttpException {

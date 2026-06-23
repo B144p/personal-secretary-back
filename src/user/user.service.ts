@@ -1,6 +1,16 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { AiSetting } from '@prisma/client';
+import OpenAI from 'openai';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { CryptoService } from 'src/crypto/crypto.service';
+import { IAiTaskModels } from 'src/openai/ai-task';
+import { ALLOWED_AI_MODELS } from 'src/openai/models';
+import { UpdateApiKeyDto, updateApiKeySchema } from './dto/update-api-key.dto';
+import {
+  UpdateAiModelsDto,
+  updateAiModelsSchema,
+} from './dto/update-ai-models.dto';
 import {
   UpdateSettingsDto,
   updateSettingsSchema,
@@ -8,7 +18,10 @@ import {
 
 @Injectable()
 export class UserService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly crypto: CryptoService,
+  ) {}
 
   async getProfile(id: string) {
     const user = await this.prisma.user.findUnique({
@@ -94,5 +107,85 @@ export class UserService {
         special_days: dto.special_days ?? undefined,
       },
     });
+  }
+
+  // Used internally by AI call sites — no decryption, just the model picks.
+  async getAiModels(userId: string): Promise<IAiTaskModels> {
+    return this.prisma.aiSetting.upsert({
+      where: { user_id: userId },
+      update: {},
+      create: { user_id: userId },
+      select: {
+        model_plan_generation: true,
+        model_regeneration: true,
+        model_scheduling: true,
+      },
+    });
+  }
+
+  async getAiSettings(userId: string) {
+    const aiSetting = await this.prisma.aiSetting.upsert({
+      where: { user_id: userId },
+      update: {},
+      create: { user_id: userId },
+    });
+    return this.toAiSettingsResponse(aiSetting);
+  }
+
+  async updateAiModels(userId: string, body: unknown) {
+    const parsed = updateAiModelsSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.message);
+    }
+
+    const dto: UpdateAiModelsDto = parsed.data;
+    const aiSetting = await this.prisma.aiSetting.upsert({
+      where: { user_id: userId },
+      update: dto,
+      create: { user_id: userId, ...dto },
+    });
+    return this.toAiSettingsResponse(aiSetting);
+  }
+
+  async updateApiKey(userId: string, body: unknown) {
+    const parsed = updateApiKeySchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.message);
+    }
+
+    const dto: UpdateApiKeyDto = parsed.data;
+    try {
+      await new OpenAI({ apiKey: dto.api_key }).models.list();
+    } catch {
+      throw new AppException(
+        AppErrorCode.INVALID_API_KEY,
+        'The provided OpenAI API key is invalid.',
+      );
+    }
+
+    const api_key_encrypted = this.crypto.encrypt(dto.api_key);
+    const aiSetting = await this.prisma.aiSetting.upsert({
+      where: { user_id: userId },
+      update: { api_key_encrypted },
+      create: { user_id: userId, api_key_encrypted },
+    });
+    return this.toAiSettingsResponse(aiSetting);
+  }
+
+  private toAiSettingsResponse(aiSetting: AiSetting) {
+    const { api_key_encrypted, ...rest } = aiSetting;
+    return {
+      ...rest,
+      available_models: ALLOWED_AI_MODELS,
+      api_key: this.describeApiKey(api_key_encrypted),
+    };
+  }
+
+  private describeApiKey(encrypted: string | null) {
+    if (!encrypted) return { configured: false, last4: null };
+    return {
+      configured: true,
+      last4: this.crypto.decrypt(encrypted).slice(-4),
+    };
   }
 }

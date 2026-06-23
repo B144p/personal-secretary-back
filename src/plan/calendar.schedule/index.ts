@@ -5,11 +5,13 @@ import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
 import OpenAI from 'openai';
 import pLimit from 'p-limit';
-import { AiTask, getModelForTask } from 'src/openai/ai-task';
+import { AiTask, getModelForTask, IAiTaskModels } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
+import { UserService } from 'src/user/user.service';
 import { withRetry } from 'src/utils';
 import { z } from 'zod';
 import { ITaskScheduleProps } from '../interfaces';
@@ -27,9 +29,10 @@ const limit = pLimit(2);
 @Injectable()
 export class CalendarScheduleService {
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
+    private readonly userService: UserService,
   ) {}
 
   async generateAndApplyTaskSchedule({ userId, id }: ITaskScheduleProps) {
@@ -67,8 +70,11 @@ export class CalendarScheduleService {
       range,
     });
 
+    const client = await this.openaiFactory.forUser(userId);
+    const models = await this.userService.getAiModels(userId);
     const generatedSchedule = await generateLeafSchedule({
-      client: this.openai,
+      client,
+      models,
       calendar: calendarEvents,
       plan,
       userState,
@@ -226,6 +232,7 @@ type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & {
 
 const generateLeafSchedule = async ({
   client,
+  models,
   plan,
   calendar,
   userState,
@@ -262,7 +269,7 @@ const generateLeafSchedule = async ({
 
   const callAI = (correctionMsg?: string) =>
     client.responses.parse({
-      model: getModelForTask(AiTask.SCHEDULING),
+      model: getModelForTask(AiTask.SCHEDULING, models),
       input: [
         {
           role: 'system',
@@ -437,6 +444,7 @@ const validateSchedule = (
 
 interface IGenerateLeafSchedule {
   client: OpenAI;
+  models: IAiTaskModels;
   plan: Exclude<
     Awaited<ReturnType<CalendarScheduleService['getLeafTasks']>>,
     null

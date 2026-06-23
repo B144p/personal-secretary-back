@@ -3,22 +3,26 @@ import OpenAI from 'openai';
 import { ChatModel } from 'openai/resources';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { z } from 'zod';
+import { OpenAIClientFactory } from './openai-client.factory';
 import { classifyRulesPrompt } from './prompt';
 import { CategoryRulesSchema, ICategoryRulesResponse } from './schemas';
 import { validateOpenAIResponse } from './utils';
 
+// NOTE: Dev-only / out-of-v1-scope (requirements/2026-05-16.md §2.2, T16). Gated by DevOnlyGuard,
+// NOTE: not reachable in production. Intentionally hardcoded — not part of the AiSetting/getModelForTask DB config.
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
 @Injectable()
 export class CalendarClassifierService {
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
   ) {}
 
-  async classifyEvent(summaries: string[]) {
+  async classifyEvent(userId: string, summaries: string[]) {
+    const client = await this.openaiFactory.forUser(userId);
     const classifiedEvent = await classifyEventWithOpenAI({
-      client: this.openai,
+      client,
       summaries,
     });
     const createCategoryRuleRes = await upsertCategoryRule({

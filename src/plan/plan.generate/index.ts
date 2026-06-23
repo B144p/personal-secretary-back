@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
 import { calendar_v3 } from 'googleapis';
-import OpenAI from 'openai';
 import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
+import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
 import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
@@ -46,14 +46,16 @@ const GENERATE_PLAN_JSON_SCHEMA = patchSchema(
 @Injectable()
 export class GeneratePlanService {
   constructor(
-    private readonly openai: OpenAI,
+    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
     private readonly calendarService: CalendarService,
   ) {}
 
   async generatePlan({ userId, prompt }: IGeneratePlanProps) {
-    const generatedPlan = await generateTask({ client: this.openai, prompt });
+    const client = await this.openaiFactory.forUser(userId);
+    const models = await this.userService.getAiModels(userId);
+    const generatedPlan = await generateTask({ client, models, prompt });
     const user = await this.userService.getProfile(userId);
     const createdPlan = await upsertPlan({
       user,
@@ -64,16 +66,19 @@ export class GeneratePlanService {
   }
 
   async reGeneratePlan({
-    userId: _userId,
+    userId,
     preservedTasks,
     parentTaskId,
     data,
   }: IReGeneratePlanProps) {
     const plan = await this.prisma.plan.findUnique({ where: { id: data.id } });
     const planTitle = plan?.title ?? '';
+    const client = await this.openaiFactory.forUser(userId);
+    const models = await this.userService.getAiModels(userId);
 
     const reGeneratedPlan = await reGenerateTask({
-      client: this.openai,
+      client,
+      models,
       data: {
         reason: data.reason,
         feedback: data.feedback,
@@ -116,11 +121,12 @@ export class GeneratePlanService {
 
 const generateTask = async ({
   client,
+  models,
   prompt: { goal, more_info },
 }: IGenerateTaskProps) => {
   const call = () =>
     client.responses.parse({
-      model: getModelForTask(AiTask.PLAN_GENERATION),
+      model: getModelForTask(AiTask.PLAN_GENERATION, models),
       input: [
         {
           role: 'system',
@@ -161,7 +167,7 @@ const generateTask = async ({
 
   if (exceedsMaxDepth(outputParsed.tasks, 0)) {
     llmRes = await client.responses.parse({
-      model: getModelForTask(AiTask.PLAN_GENERATION),
+      model: getModelForTask(AiTask.PLAN_GENERATION, models),
       input: [
         {
           role: 'system',
@@ -368,10 +374,11 @@ const insertTaskTree = async ({
 
 const reGenerateTask = async ({
   client,
+  models,
   data: { reason, feedback, planTitle, preservedTasks },
 }: IReGenerateTaskProps) => {
   const llmRes = await client.responses.parse({
-    model: getModelForTask(AiTask.REGENERATION),
+    model: getModelForTask(AiTask.REGENERATION, models),
     input: [
       {
         role: 'system',
