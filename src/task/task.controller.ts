@@ -7,6 +7,8 @@ import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { TaskService } from './task.service';
 
+// NOTE: Dev-only debug tooling for calendar category-rule generation/classification —
+// NOTE: out of v1 scope (requirements/2026-05-16.md §2.2, T16); DevOnlyGuard 404s every route here in production.
 @Controller('task')
 @UseGuards(AuthGuard(JWT_STRATEGY_NAME), ApprovedGuard, DevOnlyGuard)
 export class TaskController {

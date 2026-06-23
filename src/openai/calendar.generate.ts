@@ -8,6 +8,8 @@ import { OpenAIClientFactory } from './openai-client.factory';
 import { CalendarGeneratorSchema } from './schemas';
 import { validateOpenAIResponse } from './utils';
 
+// NOTE: Dev-only / out-of-v1-scope (requirements/2026-05-16.md §2.2, T16). Gated by DevOnlyGuard,
+// NOTE: not reachable in production. Intentionally hardcoded — not part of the AiSetting/getModelForTask DB config.
 const CHAT_MODEL: ChatModel = 'gpt-5-nano';
 
 @Injectable()
