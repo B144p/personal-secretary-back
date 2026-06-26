@@ -184,7 +184,13 @@ export class PlanService {
 
     await this.prisma.plan.update({
       where: { id },
-      data: { is_paused: true, paused_at: new Date() },
+      data: {
+        is_paused: true,
+        paused_at: new Date(),
+        ...(plan.status === EPlanStatus.SCHEDULED && {
+          status: EPlanStatus.HOLD,
+        }),
+      },
     });
     return { message: 'Plan paused' };
   }
@@ -197,7 +203,7 @@ export class PlanService {
       throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
     if (!plan.is_paused) return { message: 'Plan is not paused' };
 
-    if (plan.status === EPlanStatus.SCHEDULED) {
+    if (plan.status === EPlanStatus.HOLD) {
       await this.calendarScheduleService.generateAndApplyTaskSchedule({
         userId,
         id,

@@ -24,10 +24,14 @@ import { schedulePrompt } from './prompt';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const limit = pLimit(2);
+const limit = pLimit(8);
 
 @Injectable()
 export class CalendarScheduleService {
+  // TODO: replace with a job queue (e.g. BullMQ) so the lock survives restarts
+  // and works correctly across multiple backend instances.
+  private readonly schedulingLocks = new Set<string>();
+
   constructor(
     private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
@@ -35,7 +39,29 @@ export class CalendarScheduleService {
     private readonly userService: UserService,
   ) {}
 
-  async generateAndApplyTaskSchedule({ userId, id }: ITaskScheduleProps) {
+  async generateAndApplyTaskSchedule(props: ITaskScheduleProps) {
+    // Guard against a second concurrent call (e.g. double-click, retry after
+    // a slow AI response) scheduling the same plan twice — each call creates
+    // real Google Calendar events before persisting, so a race here would
+    // leave one attempt's calendar events orphaned with no DB record.
+    if (this.schedulingLocks.has(props.id)) {
+      throw new AppException(
+        AppErrorCode.SCHEDULING_IN_PROGRESS,
+        'This plan is already being scheduled',
+      );
+    }
+    this.schedulingLocks.add(props.id);
+    try {
+      return await this.doGenerateAndApplyTaskSchedule(props);
+    } finally {
+      this.schedulingLocks.delete(props.id);
+    }
+  }
+
+  private async doGenerateAndApplyTaskSchedule({
+    userId,
+    id,
+  }: ITaskScheduleProps) {
     // Reject if another plan is already SCHEDULED
     const otherScheduled = await this.prisma.plan.findFirst({
       where: {
@@ -89,23 +115,35 @@ export class CalendarScheduleService {
     });
 
     // Persist TaskEvents + update plan status in a transaction
-    await this.prisma.$transaction([
-      ...taskEvents.map(({ taskId, googleEventId, start, end }) =>
-        this.prisma.taskEvent.create({
-          data: {
-            task_id: taskId,
-            google_event_id: googleEventId,
-            start: new Date(start),
-            end: new Date(end),
-            is_active: true,
-          },
+    try {
+      await this.prisma.$transaction([
+        ...taskEvents.map(({ taskId, googleEventId, start, end }) =>
+          this.prisma.taskEvent.create({
+            data: {
+              task_id: taskId,
+              google_event_id: googleEventId,
+              start: new Date(start),
+              end: new Date(end),
+              is_active: true,
+            },
+          }),
+        ),
+        this.prisma.plan.update({
+          where: { id },
+          data: { status: EPlanStatus.SCHEDULED },
         }),
-      ),
-      this.prisma.plan.update({
-        where: { id },
-        data: { status: EPlanStatus.SCHEDULED },
-      }),
-    ]);
+      ]);
+    } catch (err) {
+      // The Calendar events above were already created via the Google API —
+      // if persisting fails, remove them so they don't leak with no DB record.
+      const calClient = await this.calendarService.getClient(userId);
+      await this.calendarService.removeEvents({
+        client: calClient,
+        calendarId: 'primary',
+        events: taskEvents.map((e) => e.googleEventId),
+      });
+      throw err;
+    }
 
     const scheduledTaskIds = taskEvents.map((e) => e.taskId);
     const scheduledLeafIds = new Set(scheduledTaskIds);
