@@ -211,7 +211,22 @@ export class UpdateProgressService {
       return dayjs(activeEvent.end).isAfter(now);
     });
 
-    if (slippedLeaves.length === 0 && completedEarly.length === 0) {
+    // Tasks just marked DONE whose event was already in the past (late completion).
+    // Neither slippedLeaves nor completedEarly catches this case.
+    const completedLate = allTasks.filter((t) => {
+      if (!leafIds.has(t.id)) return false;
+      if (!completedTaskIds.has(t.id)) return false;
+      const activeEvent = t.events[0];
+      if (!activeEvent) return false;
+      return dayjs(activeEvent.end).isBefore(now);
+    });
+
+    if (
+      slippedLeaves.length === 0 &&
+      completedEarly.length === 0 &&
+      completedLate.length === 0 &&
+      heldLeavesWithFutureEvents.length === 0
+    ) {
       return {
         rescheduled: 0,
         planStatus: EPlanStatus.SCHEDULED,
@@ -227,6 +242,16 @@ export class UpdateProgressService {
         leafIds.has(t.id) &&
         t.status !== ETaskStatus.DONE &&
         t.status !== ETaskStatus.HOLD,
+    );
+
+    const taskMeta = new Map(
+      remainingLeaves.map((t) => [
+        t.id,
+        {
+          status: t.status,
+          activeEvent: t.events[0] as (typeof t.events)[0] | undefined,
+        },
+      ]),
     );
 
     let rescheduledCount = 0;
@@ -292,53 +317,95 @@ export class UpdateProgressService {
         }
 
         try {
-          const googleEventId = await withRetry(() =>
-            limit(() =>
-              insertCalendarEvent({
-                userId,
-                planId: plan.id,
-                client: this.calendarService,
-                timeZone: userState.time_zone,
-                event: item,
-              }),
-            ),
-          );
+          const meta = taskMeta.get(taskId);
+          const isPendingWithEvent =
+            meta?.status === ETaskStatus.PENDING && !!meta?.activeEvent;
 
-          await this.prisma.$transaction([
-            // Deactivate old event
-            this.prisma.taskEvent.updateMany({
-              where: { task_id: taskId, is_active: true },
-              data: { is_active: false },
-            }),
-            // Create new active event
-            this.prisma.taskEvent.create({
-              data: {
-                task_id: taskId,
-                google_event_id: googleEventId,
-                start: new Date(item.start),
-                end: new Date(item.end),
-                is_active: true,
-              },
-            }),
-          ]);
-
-          rescheduled.push(taskId);
-
-          // Clean up the stale event now that the task has a new active one.
-          const oldEventIds = oldEventIdsByTask.get(taskId);
-          if (oldEventIds && oldEventIds.length > 0) {
+          let patchedInPlace = false;
+          if (isPendingWithEvent) {
             try {
-              await this.calendarService.removeEvents({
-                client: calClient,
-                events: oldEventIds,
+              // PENDING task: no work history to preserve — shift the existing event in place.
+              await withRetry(async () => {
+                await this.calendarService.patchEvent({
+                  userId,
+                  eventId: meta.activeEvent!.google_event_id,
+                  requestBody: {
+                    summary: item.title ?? '',
+                    start: {
+                      dateTime: item.start,
+                      timeZone: userState.time_zone,
+                    },
+                    end: {
+                      dateTime: item.end,
+                      timeZone: userState.time_zone,
+                    },
+                  },
+                });
               });
+              await this.prisma.taskEvent.updateMany({
+                where: { task_id: taskId, is_active: true },
+                data: { start: new Date(item.start), end: new Date(item.end) },
+              });
+              patchedInPlace = true;
             } catch (err) {
+              // Event likely manually deleted from Google Calendar — fall through to recreate it.
               this.logger.warn(
-                `Failed to delete stale calendar event(s) for task ${taskId}`,
+                `In-place patch failed for PENDING task ${taskId}; recreating event`,
                 err instanceof Error ? err.stack : String(err),
               );
             }
           }
+
+          if (!patchedInPlace) {
+            // IN_PROGRESS (or no existing event, or PENDING fallback after failed patch):
+            // insert a new Google event and deactivate the old task_event.
+            // IN_PROGRESS slipped tasks keep their old calendar event as a work-history record.
+            const googleEventId = await withRetry(() =>
+              limit(() =>
+                insertCalendarEvent({
+                  userId,
+                  planId: plan.id,
+                  client: this.calendarService,
+                  timeZone: userState.time_zone,
+                  event: item,
+                }),
+              ),
+            );
+
+            await this.prisma.$transaction([
+              this.prisma.taskEvent.updateMany({
+                where: { task_id: taskId, is_active: true },
+                data: { is_active: false },
+              }),
+              this.prisma.taskEvent.create({
+                data: {
+                  task_id: taskId,
+                  google_event_id: googleEventId,
+                  start: new Date(item.start),
+                  end: new Date(item.end),
+                  is_active: true,
+                },
+              }),
+            ]);
+
+            // Delete the stale Google event (best-effort; 404 on already-deleted is harmless).
+            const oldEventIds = oldEventIdsByTask.get(taskId);
+            if (oldEventIds && oldEventIds.length > 0) {
+              try {
+                await this.calendarService.removeEvents({
+                  client: calClient,
+                  events: oldEventIds,
+                });
+              } catch (err) {
+                this.logger.warn(
+                  `Failed to delete stale calendar event(s) for task ${taskId}`,
+                  err instanceof Error ? err.stack : String(err),
+                );
+              }
+            }
+          }
+
+          rescheduled.push(taskId);
         } catch {
           failedTaskIds.push(taskId);
         }

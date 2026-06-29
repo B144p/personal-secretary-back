@@ -10,6 +10,7 @@ import { getCalendarClient } from './calendar.client';
 import {
   IGetCalendarRangeProps,
   IInsertEvent,
+  IPatchEvent,
   IRemoveEvents,
 } from './interfaces';
 import { categorizeMockup } from './mocks';
@@ -189,6 +190,19 @@ export class CalendarService {
       results: dataFormat,
       count: dataFormat.length,
     };
+  }
+
+  async patchEvent({
+    userId,
+    eventId,
+    requestBody,
+  }: IPatchEvent): Promise<void> {
+    const calClient = await this.getClient(userId);
+    await calClient.events.patch({
+      calendarId: 'primary',
+      eventId,
+      requestBody,
+    });
   }
 
   async removeEvents({

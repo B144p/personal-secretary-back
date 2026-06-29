@@ -34,6 +34,12 @@ export interface IRemoveEvents {
   events: Array<string>;
 }
 
+export interface IPatchEvent {
+  userId: string;
+  eventId: string;
+  requestBody: calendar_v3.Schema$Event;
+}
+
 export interface IHoldPlanProps {
   id: string;
   userId: string;
