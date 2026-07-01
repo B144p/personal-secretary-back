@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { generateScheduleResponseSchema } from '../schemas';
 import { schedulePrompt } from '../calendar.schedule/prompt';
 import { CalendarScheduleService } from '../calendar.schedule';
+import { buildActiveTaskEventWrite } from '../task-event.write';
 import type {
   IGetCurrentScheduleProps,
   IUpdateProgressProps,
@@ -342,10 +343,15 @@ export class UpdateProgressService {
                   },
                 });
               });
-              await this.prisma.taskEvent.updateMany({
-                where: { task_id: taskId, is_active: true },
-                data: { start: new Date(item.start), end: new Date(item.end) },
-              });
+              await this.prisma.$transaction(
+                buildActiveTaskEventWrite(this.prisma, {
+                  taskId,
+                  googleEventId: meta.activeEvent!.google_event_id,
+                  start: item.start,
+                  end: item.end,
+                  reuseRowId: meta.activeEvent!.id,
+                }),
+              );
               patchedInPlace = true;
             } catch (err) {
               // Event likely manually deleted from Google Calendar — fall through to recreate it.
@@ -372,21 +378,15 @@ export class UpdateProgressService {
               ),
             );
 
-            await this.prisma.$transaction([
-              this.prisma.taskEvent.updateMany({
-                where: { task_id: taskId, is_active: true },
-                data: { is_active: false },
+            await this.prisma.$transaction(
+              buildActiveTaskEventWrite(this.prisma, {
+                taskId,
+                googleEventId,
+                start: item.start,
+                end: item.end,
+                preserveHistory: true,
               }),
-              this.prisma.taskEvent.create({
-                data: {
-                  task_id: taskId,
-                  google_event_id: googleEventId,
-                  start: new Date(item.start),
-                  end: new Date(item.end),
-                  is_active: true,
-                },
-              }),
-            ]);
+            );
 
             // Delete the stale Google event (best-effort; 404 on already-deleted is harmless).
             const oldEventIds = oldEventIdsByTask.get(taskId);

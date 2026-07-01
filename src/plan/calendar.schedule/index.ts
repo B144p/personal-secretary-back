@@ -19,6 +19,7 @@ import {
   generateScheduleResponseSchema,
   IGenerateScheduleResponse,
 } from '../schemas';
+import { buildActiveTaskEventWrite } from '../task-event.write';
 import { schedulePrompt } from './prompt';
 
 dayjs.extend(utc);
@@ -114,18 +115,33 @@ export class CalendarScheduleService {
       data: generatedSchedule,
     });
 
+    // Reuse each task's most recent inactive TaskEvent row (left behind by a prior
+    // pause) instead of inserting a new one, so pause→resume cycles don't accumulate
+    // dead rows. First-time scheduling has no prior row → create. is_active:false
+    // filter guarantees we never clobber a live event.
+    const reusableRows = await this.prisma.taskEvent.findMany({
+      where: {
+        task_id: { in: taskEvents.map((e) => e.taskId) },
+        is_active: false,
+      },
+      orderBy: { created_at: 'desc' },
+    });
+    const reuseIdByTask = new Map<string, string>();
+    for (const row of reusableRows) {
+      if (!reuseIdByTask.has(row.task_id))
+        reuseIdByTask.set(row.task_id, row.id);
+    }
+
     // Persist TaskEvents + update plan status in a transaction
     try {
       await this.prisma.$transaction([
-        ...taskEvents.map(({ taskId, googleEventId, start, end }) =>
-          this.prisma.taskEvent.create({
-            data: {
-              task_id: taskId,
-              google_event_id: googleEventId,
-              start: new Date(start),
-              end: new Date(end),
-              is_active: true,
-            },
+        ...taskEvents.flatMap(({ taskId, googleEventId, start, end }) =>
+          buildActiveTaskEventWrite(this.prisma, {
+            taskId,
+            googleEventId,
+            start,
+            end,
+            reuseRowId: reuseIdByTask.get(taskId),
           }),
         ),
         this.prisma.plan.update({
