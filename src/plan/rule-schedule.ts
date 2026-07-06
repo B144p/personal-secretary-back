@@ -8,6 +8,9 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 const DEFAULT_DURATION_MINUTES = 30;
+// Rest period inserted between consecutive placed tasks (not before the
+// first task, and never carried across a day roll).
+const BREAK_MINUTES = 15;
 // Safety bound on cursor advances per task, guarding against a hang if
 // UserState is misconfigured (e.g. every weekday marked as a day off).
 const MAX_PLACEMENT_ITERATIONS = 500;
@@ -133,7 +136,7 @@ export const computeRuleSchedule = ({
         start: cursor.format(),
         end: blockEnd.format(),
       });
-      cursor = blockEnd;
+      cursor = blockEnd.add(BREAK_MINUTES, 'minute');
       break;
     }
   }

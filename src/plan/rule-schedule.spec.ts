@@ -18,7 +18,7 @@ const baseUserState: UserState = {
 } as UserState;
 
 describe('computeRuleSchedule', () => {
-  it('packs tasks back-to-back in the given order with exact durations', () => {
+  it('packs tasks in the given order with exact durations and a 15-minute break between them', () => {
     const { placements, unschedulableTaskIds } = computeRuleSchedule({
       tasks: [
         { id: 't1', estimated_minutes: 60 },
@@ -33,13 +33,32 @@ describe('computeRuleSchedule', () => {
     expect(placements.map((p) => p.taskId)).toEqual(['t1', 't2', 't3']);
 
     for (let i = 1; i < placements.length; i++) {
-      expect(placements[i].start).toBe(placements[i - 1].end);
+      expect(
+        dayjs(placements[i].start).diff(dayjs(placements[i - 1].end), 'minute'),
+      ).toBe(15);
     }
 
     const durations = placements.map((p) =>
       dayjs(p.end).diff(dayjs(p.start), 'minute'),
     );
     expect(durations).toEqual([60, 30, 90]);
+  });
+
+  it('inserts a 15-minute gap between two consecutive tasks', () => {
+    const { placements } = computeRuleSchedule({
+      tasks: [
+        { id: 't1', estimated_minutes: 30 },
+        { id: 't2', estimated_minutes: 30 },
+      ],
+      busyIntervals: [],
+      userState: baseUserState,
+    });
+
+    const gap = dayjs(placements[1].start).diff(
+      dayjs(placements[0].end),
+      'minute',
+    );
+    expect(gap).toBe(15);
   });
 
   it('rolls a task to the next working day when it does not fit before working hours end', () => {
