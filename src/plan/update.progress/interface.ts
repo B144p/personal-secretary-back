@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 export type IGetCurrentScheduleProps = IUserReq & {};
 
 export interface IStatusChange {
@@ -15,3 +17,8 @@ export interface IUpdateProgressProps extends IUserReq {
 interface IUserReq {
   userId: string;
 }
+
+export type PlanWithTasks = Prisma.PlanGetPayload<{
+  include: { tasks: { include: { events: true } } };
+}>;
+export type LeafTask = PlanWithTasks['tasks'][number];

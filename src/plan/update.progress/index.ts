@@ -1,16 +1,26 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { EPlanStatus, ETaskStatus, UserState } from '@prisma/client';
+import { EPlanStatus } from '@prisma/client';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
-import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { withRetry } from 'src/utils';
 import { CalendarScheduleService } from '../calendar.schedule';
-import { computeRuleSchedule } from '../rule-schedule';
-import { buildActiveTaskEventWrite } from '../task-event.write';
+import {
+  allNonHeldLeavesDone,
+  classifyLeaves,
+  findHeldLeavesWithFutureEvents,
+  getLeafIds,
+} from './classify';
+import {
+  applyDoneMarkers,
+  applyRuleReschedule,
+  applyStatusChanges,
+  cleanupHeldLeaves,
+  persistDailyFeedback,
+  reconcileCalendar,
+} from './helpers';
 import type {
   IGetCurrentScheduleProps,
   IUpdateProgressProps,
@@ -18,8 +28,6 @@ import type {
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
-
-const limit = pLimit(2);
 
 @Injectable()
 export class UpdateProgressService {
@@ -37,6 +45,11 @@ export class UpdateProgressService {
 
   async updateProgress({ userId, data }: IUpdateProgressProps) {
     const { statusChanges = [], contextText } = data;
+    const deps = {
+      prisma: this.prisma,
+      calendarService: this.calendarService,
+      logger: this.logger,
+    };
 
     if (statusChanges.length === 0 && !contextText) {
       throw new AppException(
@@ -67,49 +80,28 @@ export class UpdateProgressService {
 
     // 1. Reconcile calendar: absorb any manual moves of our events (best-effort —
     // a calendar hiccup must not block saving the user's status changes)
-    try {
-      await reconcileCalendarMoves({
-        userId,
-        plan,
-        calendarService: this.calendarService,
-        prisma: this.prisma,
-      });
-    } catch (err) {
-      this.logger.error(
-        'Failed to reconcile calendar moves',
-        err instanceof Error ? err.stack : String(err),
-      );
-    }
+    await reconcileCalendar(userId, plan, deps);
 
     // 2. Apply status changes
-    if (statusChanges.length > 0) {
-      await this.prisma.$transaction(
-        statusChanges.map(({ taskId, newStatus }) =>
-          this.prisma.task.update({
-            where: { id: taskId, plan_id: plan.id },
-            data: { status: newStatus as ETaskStatus },
-          }),
-        ),
-      );
-    }
+    await applyStatusChanges(plan.id, statusChanges, deps);
 
     // 3. Persist DailyFeedback
-    await this.prisma.dailyFeedback.create({
-      data: {
-        plan_id: plan.id,
-        date: dayjs().tz(userState.time_zone).startOf('day').toDate(),
-        status_changes:
-          statusChanges as unknown as import('@prisma/client').Prisma.InputJsonValue,
-        context_text: contextText,
-      },
-    });
+    await persistDailyFeedback(
+      plan.id,
+      statusChanges,
+      contextText,
+      userState,
+      deps,
+    );
 
     // 4. Re-fetch updated plan tasks
     const updatedPlan = await this.prisma.plan.findUnique({
       where: { id: plan.id },
       include: {
         tasks: {
-          include: { events: { where: { is_active: true } } },
+          include: {
+            events: { where: { is_active: true } },
+          },
         },
       },
     });
@@ -123,50 +115,17 @@ export class UpdateProgressService {
     // any) and exclude them from scheduling below. Past events are left
     // untouched as a historical record. Best-effort — must run even if this
     // request has no other reschedule-worthy change.
-    const heldLeavesWithFutureEvents = allTasks.filter((t) => {
-      if (!leafIds.has(t.id)) return false;
-      if (t.status !== ETaskStatus.HOLD) return false;
-      const activeEvent = t.events[0];
-      if (!activeEvent) return false;
-      return dayjs(activeEvent.end).isAfter(now);
-    });
-
-    if (heldLeavesWithFutureEvents.length > 0) {
-      try {
-        const calClient = await this.calendarService.getClient(userId);
-        const eventIds = heldLeavesWithFutureEvents.flatMap((t) =>
-          t.events.map((e) => e.google_event_id),
-        );
-        await this.calendarService.removeEvents({
-          client: calClient,
-          events: eventIds,
-        });
-        await this.prisma.taskEvent.updateMany({
-          where: {
-            task_id: { in: heldLeavesWithFutureEvents.map((t) => t.id) },
-            is_active: true,
-          },
-          data: { is_active: false },
-        });
-      } catch (err) {
-        this.logger.warn(
-          'Failed to clean up calendar event(s) for held task(s)',
-          err instanceof Error ? err.stack : String(err),
-        );
-      }
-    }
+    const heldLeavesWithFutureEvents = findHeldLeavesWithFutureEvents(
+      allTasks,
+      leafIds,
+      now,
+    );
+    await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
 
     // 5. Check if all non-held leaves are DONE → mark plan DONE. Held leaves
     // are skipped for completion purposes; an all-held plan stays stalled
     // rather than auto-completing.
-    const nonHeldLeaves = allTasks.filter(
-      (t) => leafIds.has(t.id) && t.status !== ETaskStatus.HOLD,
-    );
-    const allLeavesDone =
-      nonHeldLeaves.length > 0 &&
-      nonHeldLeaves.every((t) => t.status === ETaskStatus.DONE);
-
-    if (allLeavesDone) {
+    if (allNonHeldLeavesDone(allTasks, leafIds)) {
       await this.prisma.plan.update({
         where: { id: plan.id },
         data: { status: EPlanStatus.DONE },
@@ -178,40 +137,10 @@ export class UpdateProgressService {
       };
     }
 
-    // 6. Identify slipped leaf tasks: PENDING or IN_PROGRESS with active event end in the past
-    const slippedLeaves = allTasks.filter((t) => {
-      if (!leafIds.has(t.id)) return false;
-      if (t.status === ETaskStatus.DONE) return false;
-      if (t.status === ETaskStatus.HOLD) return false;
-      const activeEvent = t.events[0];
-      if (!activeEvent) return false;
-      return dayjs(activeEvent.end).isBefore(now);
-    });
-
-    // 6a. Identify leaves completed early in THIS request: just marked DONE,
-    // but their active event hasn't ended yet — finished ahead of schedule
-    const completedTaskIds = new Set(
-      statusChanges
-        .filter((sc) => sc.newStatus === ETaskStatus.DONE)
-        .map((sc) => sc.taskId),
-    );
-    const completedEarly = allTasks.filter((t) => {
-      if (!leafIds.has(t.id)) return false;
-      if (!completedTaskIds.has(t.id)) return false;
-      const activeEvent = t.events[0];
-      if (!activeEvent) return false;
-      return dayjs(activeEvent.end).isAfter(now);
-    });
-
-    // Tasks just marked DONE whose event was already in the past (late completion).
-    // Neither slippedLeaves nor completedEarly catches this case.
-    const completedLate = allTasks.filter((t) => {
-      if (!leafIds.has(t.id)) return false;
-      if (!completedTaskIds.has(t.id)) return false;
-      const activeEvent = t.events[0];
-      if (!activeEvent) return false;
-      return dayjs(activeEvent.end).isBefore(now);
-    });
+    // 6. Classify what changed: slipped / completed-early / completed-late
+    // leaves, plus the full set of remaining leaves that still need a slot.
+    const { slippedLeaves, completedEarly, completedLate, remainingLeaves } =
+      classifyLeaves({ allTasks, leafIds, statusChanges, now });
 
     if (
       slippedLeaves.length === 0 &&
@@ -226,219 +155,25 @@ export class UpdateProgressService {
       };
     }
 
-    // 7. Re-schedule slipped + remaining unscheduled leaves. Triggering this
-    // on early completion (not just overdue) lets the scheduler — which
-    // already packs tasks ASAP — pull the remaining plan forward.
-    const remainingLeaves = allTasks.filter(
-      (t) =>
-        leafIds.has(t.id) &&
-        t.status !== ETaskStatus.DONE &&
-        t.status !== ETaskStatus.HOLD,
-    );
-
-    const taskMeta = new Map(
-      remainingLeaves.map((t) => [
-        t.id,
+    // 7-8. Re-schedule slipped + remaining unscheduled leaves. Triggering
+    // this on early completion (not just overdue) lets the scheduler —
+    // which already packs tasks ASAP — pull the remaining plan forward.
+    const { rescheduledCount, unscheduledTaskIds, rescheduleFailed } =
+      await applyRuleReschedule(
         {
-          status: t.status,
-          activeEvent: t.events[0] as (typeof t.events)[0] | undefined,
+          userId,
+          planId: plan.id,
+          userState,
+          allTasks,
+          remainingLeaves,
+          slippedLeaves,
         },
-      ]),
-    );
-
-    let rescheduledCount = 0;
-    let unscheduledTaskIds: string[] = remainingLeaves.map((t) => t.id);
-    let rescheduleFailed = false;
-
-    // Slipped IN_PROGRESS tasks already represent real work done — keep
-    // their past event as a record instead of deleting it; they still get
-    // a fresh continuation block below like any other remaining leaf.
-    const inProgressSlippedIds = new Set(
-      slippedLeaves
-        .filter((t) => t.status === ETaskStatus.IN_PROGRESS)
-        .map((t) => t.id),
-    );
-
-    // Old Google event id(s) per task, captured before they get swapped out
-    // below — used to delete the stale event once the task is rescheduled.
-    const oldEventIdsByTask = new Map<string, string[]>(
-      remainingLeaves
-        .filter((t) => !inProgressSlippedIds.has(t.id))
-        .map((t) => [t.id, t.events.map((e) => e.google_event_id)]),
-    );
-
-    // Best-effort: the status changes above are already committed, so a
-    // calendar failure here must not turn into a 500 for the caller.
-    try {
-      const calendarEvents = await getCalendarRange({
-        userId,
-        planId: plan.id,
-        calendarService: this.calendarService,
-      });
-
-      // Order remaining leaves by tree position (sequence_order within each
-      // sibling group, depth-first) — this is the same order the AI used to
-      // be told to "preserve", now used directly to pack the schedule.
-      const orderedLeaves = orderLeavesByTree(allTasks, remainingLeaves);
-
-      const busyIntervals = calendarEvents.results
-        .filter((e) => !!e.start?.dateTime && !!e.end?.dateTime)
-        .map((e) => ({
-          start: dayjs(e.start!.dateTime),
-          end: dayjs(e.end!.dateTime),
-        }));
-
-      const { placements, unschedulableTaskIds } = computeRuleSchedule({
-        tasks: orderedLeaves.map((t) => ({
-          id: t.id,
-          estimated_minutes: t.estimated_minutes,
-        })),
-        busyIntervals,
-        userState,
-      });
-
-      const leafById = new Map(orderedLeaves.map((t) => [t.id, t]));
-      const newSchedule = placements.map((p) => {
-        const leaf = leafById.get(p.taskId)!;
-        return {
-          taskId: p.taskId,
-          title: leaf.title,
-          description: leaf.description,
-          start: p.start,
-          end: p.end,
-        };
-      });
-
-      // 8. Apply new schedule: create Google events, update TaskEvents
-      const rescheduled: string[] = [];
-      const failedTaskIds: string[] = [...unschedulableTaskIds];
-      const calClient = await this.calendarService.getClient(userId);
-
-      for (const item of newSchedule) {
-        const taskId = item.taskId;
-
-        try {
-          const meta = taskMeta.get(taskId);
-          const isPendingWithEvent =
-            meta?.status === ETaskStatus.PENDING && !!meta?.activeEvent;
-
-          let patchedInPlace = false;
-          if (isPendingWithEvent) {
-            try {
-              // PENDING task: no work history to preserve — shift the existing event in place.
-              await withRetry(async () => {
-                await this.calendarService.patchEvent({
-                  userId,
-                  eventId: meta.activeEvent!.google_event_id,
-                  requestBody: {
-                    summary: item.title ?? '',
-                    start: {
-                      dateTime: item.start,
-                      timeZone: userState.time_zone,
-                    },
-                    end: {
-                      dateTime: item.end,
-                      timeZone: userState.time_zone,
-                    },
-                  },
-                });
-              });
-              await this.prisma.$transaction(
-                buildActiveTaskEventWrite(this.prisma, {
-                  taskId,
-                  googleEventId: meta.activeEvent!.google_event_id,
-                  start: item.start,
-                  end: item.end,
-                  reuseRowId: meta.activeEvent!.id,
-                }),
-              );
-              patchedInPlace = true;
-            } catch (err) {
-              // Event likely manually deleted from Google Calendar — fall through to recreate it.
-              this.logger.warn(
-                `In-place patch failed for PENDING task ${taskId}; recreating event`,
-                err instanceof Error ? err.stack : String(err),
-              );
-            }
-          }
-
-          if (!patchedInPlace) {
-            // IN_PROGRESS (or no existing event, or PENDING fallback after failed patch):
-            // insert a new Google event and deactivate the old task_event.
-            // IN_PROGRESS slipped tasks keep their old calendar event as a work-history record.
-            const googleEventId = await withRetry(() =>
-              limit(() =>
-                insertCalendarEvent({
-                  userId,
-                  planId: plan.id,
-                  client: this.calendarService,
-                  timeZone: userState.time_zone,
-                  event: item,
-                }),
-              ),
-            );
-
-            await this.prisma.$transaction(
-              buildActiveTaskEventWrite(this.prisma, {
-                taskId,
-                googleEventId,
-                start: item.start,
-                end: item.end,
-                preserveHistory: true,
-              }),
-            );
-
-            // Delete the stale Google event (best-effort; 404 on already-deleted is harmless).
-            const oldEventIds = oldEventIdsByTask.get(taskId);
-            if (oldEventIds && oldEventIds.length > 0) {
-              try {
-                await this.calendarService.removeEvents({
-                  client: calClient,
-                  events: oldEventIds,
-                });
-              } catch (err) {
-                this.logger.warn(
-                  `Failed to delete stale calendar event(s) for task ${taskId}`,
-                  err instanceof Error ? err.stack : String(err),
-                );
-              }
-            }
-          }
-
-          rescheduled.push(taskId);
-        } catch {
-          failedTaskIds.push(taskId);
-        }
-      }
-
-      rescheduledCount = rescheduled.length;
-      unscheduledTaskIds = failedTaskIds;
-    } catch (err) {
-      this.logger.error(
-        'Failed to reschedule remaining tasks after status update',
-        err instanceof Error ? err.stack : String(err),
+        deps,
       );
-      rescheduleFailed = true;
-    }
 
     // 9. Record a marker event for tasks finished ahead of schedule. The
     // original scheduled event is left untouched; best-effort like above.
-    if (completedEarly.length > 0) {
-      try {
-        await createDoneMarkerEvents({
-          userId,
-          planId: plan.id,
-          tasks: completedEarly,
-          userState,
-          calendarService: this.calendarService,
-        });
-      } catch (err) {
-        this.logger.error(
-          'Failed to create done-marker calendar events',
-          err instanceof Error ? err.stack : String(err),
-        );
-      }
-    }
+    await applyDoneMarkers(userId, plan.id, completedEarly, userState, deps);
 
     return {
       rescheduled: rescheduledCount,
@@ -448,235 +183,3 @@ export class UpdateProgressService {
     };
   }
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const getLeafIds = (tasks: { id: string; parent_task_id: string | null }[]) => {
-  const parentSet = new Set(
-    tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
-  );
-  return new Set(tasks.filter((t) => !parentSet.has(t.id)).map((t) => t.id));
-};
-
-// Depth-first walk of the full task tree, collecting the subset of tasks
-// present in `targetLeaves` in tree order (sequence_order within each
-// sibling group). This is how AI scheduling order used to be "preserved" —
-// now it directly drives the rule-based packing order.
-const orderLeavesByTree = <
-  T extends {
-    id: string;
-    parent_task_id: string | null;
-    sequence_order: number;
-  },
->(
-  allTasks: T[],
-  targetLeaves: T[],
-): T[] => {
-  const targetIds = new Set(targetLeaves.map((t) => t.id));
-  const byParent = new Map<string | null, T[]>();
-  for (const t of allTasks) {
-    if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
-    byParent.get(t.parent_task_id)!.push(t);
-  }
-  const ordered: T[] = [];
-  const visit = (parentId: string | null) => {
-    const children = (byParent.get(parentId) ?? []).sort(
-      (a, b) => a.sequence_order - b.sequence_order,
-    );
-    for (const child of children) {
-      if (targetIds.has(child.id)) ordered.push(child);
-      visit(child.id);
-    }
-  };
-  visit(null);
-  return ordered;
-};
-
-const reconcileCalendarMoves = async ({
-  userId,
-  plan,
-  calendarService,
-  prisma,
-}: {
-  userId: string;
-  plan: {
-    id: string;
-    tasks: Array<{
-      id: string;
-      events: Array<{ id: string; google_event_id: string }>;
-    }>;
-  };
-  calendarService: CalendarService;
-  prisma: PrismaService;
-}) => {
-  const calClient = await calendarService.getClient(userId);
-  const calEvents = await calClient.events.list({
-    calendarId: 'primary',
-    privateExtendedProperty: [`plan_id=${plan.id}`],
-  });
-
-  const calMap: Record<string, { start: string; end: string }> = {};
-  for (const e of calEvents.data.items ?? []) {
-    if (e.id)
-      calMap[e.id] = {
-        start: e.start?.dateTime ?? '',
-        end: e.end?.dateTime ?? '',
-      };
-  }
-
-  for (const task of plan.tasks) {
-    for (const ev of task.events) {
-      const cal = calMap[ev.google_event_id];
-      // Skip all-day or otherwise non-timed events (empty dateTime) — they
-      // would otherwise produce an Invalid Date and fail the DB update
-      if (!cal || !cal.start || !cal.end) continue;
-      await prisma.taskEvent.update({
-        where: { id: ev.id },
-        data: { start: new Date(cal.start), end: new Date(cal.end) },
-      });
-    }
-  }
-};
-
-const getCalendarRange = async ({
-  userId,
-  planId,
-  calendarService,
-}: {
-  userId: string;
-  planId: string;
-  calendarService: CalendarService;
-}) => {
-  const { results } = await calendarService.getCalendarRange({
-    userId,
-    range: {
-      timeMin: dayjs().toISOString(),
-      timeMax: dayjs().add(1, 'month').toISOString(),
-    },
-  });
-  return {
-    // Exclude this plan's own events from the busy-list so the packer can
-    // freely repack the plan's remaining leaves into the earliest slots.
-    results: results
-      .filter(({ extendedProperties }) => {
-        return extendedProperties?.private?.plan_id !== planId;
-      })
-      .map(({ extendedProperties, summary, start, end, description }) => ({
-        extendedProperties,
-        summary,
-        start,
-        end,
-        description,
-      })),
-  };
-};
-
-const insertCalendarEvent = async ({
-  userId,
-  planId,
-  client,
-  timeZone,
-  event,
-}: {
-  userId: string;
-  planId: string;
-  client: CalendarService;
-  timeZone: string;
-  event: {
-    taskId?: string;
-    title?: string;
-    description?: string | null;
-    start: string;
-    end: string;
-  };
-}): Promise<string> => {
-  const createdEvent = await client.insertEvent({
-    userId,
-    request: {
-      params: {
-        calendarId: 'primary',
-        requestBody: {
-          summary: event.title ?? '',
-          description: event.description ?? undefined,
-          start: { dateTime: event.start, timeZone },
-          end: { dateTime: event.end, timeZone },
-          extendedProperties: {
-            private: { plan_id: planId, task_id: event.taskId ?? '' },
-          },
-        },
-      },
-    },
-  });
-  if (!createdEvent.id)
-    throw new Error('Google Calendar did not return event id');
-  return createdEvent.id;
-};
-
-// Records work finished ahead of schedule as a marker event, stacked after
-// working hours on the day it was actually completed. The originally
-// scheduled event for the task is left untouched.
-const createDoneMarkerEvents = async ({
-  userId,
-  planId,
-  tasks,
-  userState,
-  calendarService,
-}: {
-  userId: string;
-  planId: string;
-  tasks: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    estimated_minutes: number | null;
-  }>;
-  userState: UserState;
-  calendarService: CalendarService;
-}) => {
-  const [endHour, endMinute] = userState.working_hours_end
-    .split(':')
-    .map(Number);
-  let cursor = dayjs()
-    .tz(userState.time_zone)
-    .hour(endHour)
-    .minute(endMinute)
-    .second(0)
-    .millisecond(0);
-
-  for (const task of tasks) {
-    const durationMinutes = task.estimated_minutes ?? 30;
-    const start = cursor;
-    const end = cursor.add(durationMinutes, 'minute');
-
-    await withRetry(() =>
-      limit(() =>
-        calendarService.insertEvent({
-          userId,
-          request: {
-            params: {
-              calendarId: 'primary',
-              requestBody: {
-                summary: task.title,
-                description: task.description ?? undefined,
-                start: {
-                  dateTime: start.format(),
-                  timeZone: userState.time_zone,
-                },
-                end: { dateTime: end.format(), timeZone: userState.time_zone },
-                extendedProperties: {
-                  private: {
-                    plan_id: planId,
-                    task_id: task.id,
-                    done_marker: 'true',
-                  },
-                },
-              },
-            },
-          },
-        }),
-      ),
-    );
-
-    cursor = end;
-  }
-};
