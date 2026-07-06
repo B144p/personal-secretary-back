@@ -118,6 +118,42 @@ describe('computeRuleSchedule', () => {
     expect(placedStart.isBefore(busyEnd)).toBe(false);
   });
 
+  it('keeps placements within working hours (in the user tz) after a busy conflict', () => {
+    // Regression: busy-interval bounds arrive in the server-local tz, so a
+    // post-conflict cursor must be re-expressed in the user tz before the
+    // day/hour math — otherwise placements can land outside working hours on a
+    // server whose tz differs from the user's.
+    const { placements: unblocked } = computeRuleSchedule({
+      tasks: [{ id: 'probe', estimated_minutes: 60 }],
+      busyIntervals: [],
+      userState: baseUserState,
+    });
+    const naturalStart = dayjs(unblocked[0].start);
+    const busyEnd = dayjs(unblocked[0].end).add(90, 'minute');
+
+    const { placements } = computeRuleSchedule({
+      tasks: Array.from({ length: 5 }, (_, i) => ({
+        id: `t${i}`,
+        estimated_minutes: 120,
+      })),
+      busyIntervals: [{ start: naturalStart, end: busyEnd }],
+      userState: baseUserState,
+    });
+
+    const [startHour] = baseUserState.working_hours_start
+      .split(':')
+      .map(Number);
+    const [endHour] = baseUserState.working_hours_end.split(':').map(Number);
+    for (const p of placements) {
+      const start = dayjs(p.start).tz(baseUserState.time_zone);
+      const end = dayjs(p.end).tz(baseUserState.time_zone);
+      expect(start.hour()).toBeGreaterThanOrEqual(startHour);
+      // end must not spill past working-hours end on its own day
+      expect(end.hour() * 60 + end.minute()).toBeLessThanOrEqual(endHour * 60);
+      expect(baseUserState.days_off.includes(start.day())).toBe(false);
+    }
+  });
+
   it('marks a task unschedulable if its duration exceeds the working-hours window', () => {
     const { placements, unschedulableTaskIds } = computeRuleSchedule({
       tasks: [{ id: 'too-long', estimated_minutes: 700 }], // window is 600 min

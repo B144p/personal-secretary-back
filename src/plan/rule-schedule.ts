@@ -40,8 +40,11 @@ const atWorkingStart = (day: dayjs.Dayjs, state: UserState): dayjs.Dayjs => {
 
 // Rolls a cursor forward past days off and clamps it to today's working-hours
 // start if it's too early. Leaves an already-valid mid-day cursor untouched.
+// Re-expresses the incoming instant in the user's timezone first: busy-interval
+// bounds (and thus a post-conflict cursor) arrive in the server's local tz, and
+// all the day()/startOf('day')/hour() math below must run in the user's tz.
 const normalizeCursor = (time: dayjs.Dayjs, state: UserState): dayjs.Dayjs => {
-  let cursor = time;
+  let cursor = time.tz(state.time_zone);
   let rolls = 0;
   for (;;) {
     if (state.days_off.includes(cursor.day())) {
