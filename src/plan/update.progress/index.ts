@@ -3,20 +3,13 @@ import { EPlanStatus, ETaskStatus, UserState } from '@prisma/client';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
-import OpenAI from 'openai';
 import pLimit from 'p-limit';
-import { AiTask, getModelForTask, IAiTaskModels } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
-import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
-import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { UserService } from 'src/user/user.service';
 import { withRetry } from 'src/utils';
-import { z } from 'zod';
-import { generateScheduleResponseSchema } from '../schemas';
-import { schedulePrompt } from '../calendar.schedule/prompt';
 import { CalendarScheduleService } from '../calendar.schedule';
+import { computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 import type {
   IGetCurrentScheduleProps,
@@ -33,11 +26,9 @@ export class UpdateProgressService {
   private readonly logger = new Logger(UpdateProgressService.name);
 
   constructor(
-    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
     private readonly calendarScheduleService: CalendarScheduleService,
-    private readonly userService: UserService,
   ) {}
 
   async getCurrentSchedule({ userId }: IGetCurrentScheduleProps) {
@@ -277,7 +268,7 @@ export class UpdateProgressService {
     );
 
     // Best-effort: the status changes above are already committed, so a
-    // calendar/AI failure here must not turn into a 500 for the caller.
+    // calendar failure here must not turn into a 500 for the caller.
     try {
       const calendarEvents = await getCalendarRange({
         userId,
@@ -285,37 +276,46 @@ export class UpdateProgressService {
         calendarService: this.calendarService,
       });
 
-      const mappedTasks = remainingLeaves.map((t) => ({
-        id: t.id,
-        title: t.title,
-        description: t.description,
-        estimated_minutes: t.estimated_minutes,
-        status: t.status,
-        sequence_order: t.sequence_order,
-      }));
+      // Order remaining leaves by tree position (sequence_order within each
+      // sibling group, depth-first) — this is the same order the AI used to
+      // be told to "preserve", now used directly to pack the schedule.
+      const orderedLeaves = orderLeavesByTree(allTasks, remainingLeaves);
 
-      const client = await this.openaiFactory.forUser(userId);
-      const models = await this.userService.getAiModels(userId);
-      const newSchedule = await rescheduleLeaves({
-        client,
-        models,
-        tasks: mappedTasks,
-        calendar: calendarEvents,
+      const busyIntervals = calendarEvents.results
+        .filter((e) => !!e.start?.dateTime && !!e.end?.dateTime)
+        .map((e) => ({
+          start: dayjs(e.start!.dateTime),
+          end: dayjs(e.end!.dateTime),
+        }));
+
+      const { placements, unschedulableTaskIds } = computeRuleSchedule({
+        tasks: orderedLeaves.map((t) => ({
+          id: t.id,
+          estimated_minutes: t.estimated_minutes,
+        })),
+        busyIntervals,
         userState,
-        contextText,
+      });
+
+      const leafById = new Map(orderedLeaves.map((t) => [t.id, t]));
+      const newSchedule = placements.map((p) => {
+        const leaf = leafById.get(p.taskId)!;
+        return {
+          taskId: p.taskId,
+          title: leaf.title,
+          description: leaf.description,
+          start: p.start,
+          end: p.end,
+        };
       });
 
       // 8. Apply new schedule: create Google events, update TaskEvents
       const rescheduled: string[] = [];
-      const failedTaskIds: string[] = [];
+      const failedTaskIds: string[] = [...unschedulableTaskIds];
       const calClient = await this.calendarService.getClient(userId);
 
       for (const item of newSchedule) {
         const taskId = item.taskId;
-        if (!taskId) {
-          failedTaskIds.push(String(item.task_ref));
-          continue;
-        }
 
         try {
           const meta = taskMeta.get(taskId);
@@ -458,6 +458,40 @@ const getLeafIds = (tasks: { id: string; parent_task_id: string | null }[]) => {
   return new Set(tasks.filter((t) => !parentSet.has(t.id)).map((t) => t.id));
 };
 
+// Depth-first walk of the full task tree, collecting the subset of tasks
+// present in `targetLeaves` in tree order (sequence_order within each
+// sibling group). This is how AI scheduling order used to be "preserved" —
+// now it directly drives the rule-based packing order.
+const orderLeavesByTree = <
+  T extends {
+    id: string;
+    parent_task_id: string | null;
+    sequence_order: number;
+  },
+>(
+  allTasks: T[],
+  targetLeaves: T[],
+): T[] => {
+  const targetIds = new Set(targetLeaves.map((t) => t.id));
+  const byParent = new Map<string | null, T[]>();
+  for (const t of allTasks) {
+    if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
+    byParent.get(t.parent_task_id)!.push(t);
+  }
+  const ordered: T[] = [];
+  const visit = (parentId: string | null) => {
+    const children = (byParent.get(parentId) ?? []).sort(
+      (a, b) => a.sequence_order - b.sequence_order,
+    );
+    for (const child of children) {
+      if (targetIds.has(child.id)) ordered.push(child);
+      visit(child.id);
+    }
+  };
+  visit(null);
+  return ordered;
+};
+
 const reconcileCalendarMoves = async ({
   userId,
   plan,
@@ -521,7 +555,7 @@ const getCalendarRange = async ({
     },
   });
   return {
-    // Exclude this plan's own events from the AI's busy-list so it can
+    // Exclude this plan's own events from the busy-list so the packer can
     // freely repack the plan's remaining leaves into the earliest slots.
     results: results
       .filter(({ extendedProperties }) => {
@@ -535,109 +569,6 @@ const getCalendarRange = async ({
         description,
       })),
   };
-};
-
-const rescheduleLeaves = async ({
-  client,
-  models,
-  tasks,
-  calendar,
-  userState,
-  contextText,
-}: {
-  client: OpenAI;
-  models: IAiTaskModels;
-  tasks: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    estimated_minutes: number | null;
-    status: string;
-    sequence_order: number;
-  }>;
-  calendar: { results: unknown[] };
-  userState: UserState;
-  contextText?: string;
-}) => {
-  const refMap: Record<string, (typeof tasks)[number]> = {};
-  const mappedTasks = tasks.map((t, i) => {
-    const ref = `T${i + 1}`;
-    refMap[ref] = t;
-    return {
-      task_ref: ref,
-      title: t.title,
-      estimated_minutes: t.estimated_minutes,
-    };
-  });
-
-  const userConstraints = `
-## USER WORKING CONSTRAINTS
-- Timezone: '${userState.time_zone}'
-- Working hours: ${userState.working_hours_start} to ${userState.working_hours_end}
-- Days off: [${userState.days_off.join(', ')}] (0=Sunday … 6=Saturday)
-`;
-
-  const llmRes = await client.responses.parse({
-    model: getModelForTask(AiTask.SCHEDULING, models),
-    input: [
-      {
-        role: 'system',
-        content: Object.values(schedulePrompt.system).map((text) => ({
-          type: 'input_text' as const,
-          text,
-        })),
-      },
-      {
-        role: 'developer',
-        content: [
-          ...Object.values(schedulePrompt.developer).map((text) => ({
-            type: 'input_text' as const,
-            text: text.replace('{{minTaskDurationMin}}', '15'),
-          })),
-          { type: 'input_text' as const, text: userConstraints },
-        ],
-      },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text' as const,
-            text: `#TASKS: ${JSON.stringify({ tasks: mappedTasks })}`,
-          },
-          {
-            type: 'input_text' as const,
-            text: `#EXISTING SCHEDULE: ${JSON.stringify({ schedule: calendar.results })}`,
-          },
-          ...(contextText
-            ? [{ type: 'input_text' as const, text: `Context: ${contextText}` }]
-            : []),
-        ],
-      },
-    ],
-    text: {
-      format: {
-        type: 'json_schema',
-        name: 'reschedule',
-        strict: true,
-        schema: z.toJSONSchema(generateScheduleResponseSchema),
-      },
-    },
-  });
-
-  const { schedule } = validateOpenAIResponse(
-    generateScheduleResponseSchema,
-    llmRes.output_parsed,
-  );
-  return schedule.map(({ task_ref, ...rest }) => {
-    const task = refMap[task_ref];
-    return {
-      ...rest,
-      taskId: task?.id,
-      title: task?.title,
-      description: task?.description,
-      task_ref,
-    };
-  });
 };
 
 const insertCalendarEvent = async ({
