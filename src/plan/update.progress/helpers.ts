@@ -109,26 +109,38 @@ export const cleanupHeldLeaves = async (
   }
 };
 
-// Step 4b. Roll parent statuses up: any parent whose non-held children are
-// all DONE becomes DONE too, cascading up multiple levels. Best-effort —
-// a rollup failure must not turn the already-committed status changes into
-// a 500 for the caller.
+// Step 4b. Re-derive every parent's status (DONE / IN_PROGRESS / HOLD /
+// PENDING) from its children, cascading up multiple levels — a parent's
+// status always reflects its subtree. Best-effort — a rollup failure must
+// not turn the already-committed status changes into a 500 for the caller.
 export const applyParentStatusRollup = async (
   planId: string,
   allTasks: LeafTask[],
   explicitlyChangedIds: Set<string>,
   { prisma, logger }: Pick<StepDeps, 'prisma' | 'logger'>,
 ): Promise<void> => {
-  const promotedIds = computeParentStatusRollup(allTasks, explicitlyChangedIds);
-  if (promotedIds.length === 0) return;
+  const changes = computeParentStatusRollup(allTasks, explicitlyChangedIds);
+  if (changes.length === 0) return;
+
+  const idsByStatus = new Map<ETaskStatus, string[]>();
+  for (const { id, status } of changes) {
+    const ids = idsByStatus.get(status);
+    if (ids) ids.push(id);
+    else idsByStatus.set(status, [id]);
+  }
+
   try {
-    await prisma.task.updateMany({
-      where: { id: { in: promotedIds }, plan_id: planId },
-      data: { status: ETaskStatus.DONE },
-    });
+    await prisma.$transaction(
+      [...idsByStatus].map(([status, ids]) =>
+        prisma.task.updateMany({
+          where: { id: { in: ids }, plan_id: planId },
+          data: { status },
+        }),
+      ),
+    );
   } catch (err) {
     logger.warn(
-      'Failed to roll parent task status up to DONE',
+      'Failed to roll parent task statuses up from children',
       err instanceof Error ? err.stack : String(err),
     );
   }

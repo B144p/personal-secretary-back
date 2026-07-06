@@ -147,52 +147,72 @@ export const classifyLeaves = <T extends StatusClassifiable>({
   return { slippedLeaves, completedEarly, completedLate, remainingLeaves };
 };
 
-// Bottom-up: a parent whose non-HOLD children are all done (recursively)
-// should itself become DONE, cascading up multiple levels. HOLD children are
-// ignored — same rule as allNonHeldLeavesDone ("an all-held plan stays
-// stalled"). Tasks already changed explicitly this request are left alone.
-// Returns the ids of tasks that should be promoted to DONE.
+// Derives a parent's status from its children's (already-resolved) statuses:
+// - all non-HOLD children DONE (≥1 such child) → DONE
+// - any child IN_PROGRESS, or (≥1 non-HOLD child DONE but not all) → IN_PROGRESS
+// - every child HOLD → HOLD
+// - otherwise → PENDING
+const deriveParentStatus = (childStatuses: ETaskStatus[]): ETaskStatus => {
+  const nonHold = childStatuses.filter((s) => s !== ETaskStatus.HOLD);
+
+  if (nonHold.length > 0 && nonHold.every((s) => s === ETaskStatus.DONE)) {
+    return ETaskStatus.DONE;
+  }
+  if (childStatuses.some((s) => s === ETaskStatus.IN_PROGRESS)) {
+    return ETaskStatus.IN_PROGRESS;
+  }
+  if (nonHold.some((s) => s === ETaskStatus.DONE)) {
+    return ETaskStatus.IN_PROGRESS;
+  }
+  if (nonHold.length === 0) {
+    return ETaskStatus.HOLD;
+  }
+  return ETaskStatus.PENDING;
+};
+
+// Bottom-up: re-derives every parent's status from its children, cascading
+// through multiple levels — a parent's status always reflects its subtree
+// (see deriveParentStatus). Tasks explicitly changed this request keep their
+// explicit status (and that status propagates to their own parent), rather
+// than being overwritten by the derived value.
+// Returns the {id, status} pairs that actually change.
 export const computeParentStatusRollup = <
   T extends Pick<StatusClassifiable, 'id' | 'parent_task_id' | 'status'>,
 >(
   allTasks: T[],
   explicitlyChangedIds: Set<string> = new Set(),
-): string[] => {
+): { id: string; status: ETaskStatus }[] => {
   const byParent = new Map<string | null, T[]>();
   for (const t of allTasks) {
     if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
     byParent.get(t.parent_task_id)!.push(t);
   }
 
-  const promoted: string[] = [];
+  const changes: { id: string; status: ETaskStatus }[] = [];
 
-  // Returns whether this task's subtree is "effectively done" (its own
-  // status is DONE, or it should be promoted to DONE).
-  const resolve = (task: T): boolean => {
+  // Returns this task's effective status (its own, for leaves and
+  // explicitly-changed tasks; otherwise the derived status). Always recurses
+  // first so nodes below an explicitly-changed ancestor still get re-derived.
+  const resolve = (task: T): ETaskStatus => {
     const children = byParent.get(task.id) ?? [];
-    if (children.length === 0) return task.status === ETaskStatus.DONE;
+    if (children.length === 0) return task.status;
 
-    const results = children.map((c) => ({ child: c, done: resolve(c) }));
-    const considered = results.filter(
-      ({ child }) => child.status !== ETaskStatus.HOLD,
-    );
-    const shouldBeDone =
-      considered.length > 0 && considered.every(({ done }) => done);
+    const childStatuses = children.map(resolve);
 
-    if (
-      shouldBeDone &&
-      task.status !== ETaskStatus.DONE &&
-      task.status !== ETaskStatus.HOLD &&
-      !explicitlyChangedIds.has(task.id)
-    ) {
-      promoted.push(task.id);
+    // Respect an explicit change to this node: keep its status and propagate
+    // it upward, but its descendants were still re-derived above.
+    if (explicitlyChangedIds.has(task.id)) return task.status;
+
+    const derived = deriveParentStatus(childStatuses);
+    if (derived !== task.status) {
+      changes.push({ id: task.id, status: derived });
     }
 
-    return shouldBeDone || task.status === ETaskStatus.DONE;
+    return derived;
   };
 
   const roots = byParent.get(null) ?? [];
   for (const root of roots) resolve(root);
 
-  return promoted;
+  return changes;
 };

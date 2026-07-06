@@ -207,49 +207,76 @@ describe('classifyLeaves', () => {
 });
 
 describe('computeParentStatusRollup', () => {
-  it('promotes a parent when all children are DONE', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
-    const child1 = task({
-      id: 'child1',
-      parent_task_id: 'parent',
-      status: ETaskStatus.DONE,
-    });
-    const child2 = task({
-      id: 'child2',
-      parent_task_id: 'parent',
-      status: ETaskStatus.DONE,
-    });
-    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([
-      'parent',
-    ]);
+  // Builds a parent + N children with the given statuses, and returns the
+  // derived status computeParentStatusRollup assigns to the parent (or
+  // undefined if it's left unchanged).
+  const deriveFor = (
+    parentStatus: ETaskStatus,
+    childStatuses: ETaskStatus[],
+  ): ETaskStatus | undefined => {
+    const parent = task({ id: 'parent', status: parentStatus });
+    const children = childStatuses.map((status, i) =>
+      task({ id: `child${i}`, parent_task_id: 'parent', status }),
+    );
+    const changes = computeParentStatusRollup([parent, ...children]);
+    return changes.find((c) => c.id === 'parent')?.status;
+  };
+
+  it('derives DONE when all non-HOLD children are DONE', () => {
+    expect(
+      deriveFor(ETaskStatus.PENDING, [ETaskStatus.DONE, ETaskStatus.DONE]),
+    ).toBe(ETaskStatus.DONE);
   });
 
-  it('does not promote when a child is not DONE', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
-    const child1 = task({
-      id: 'child1',
-      parent_task_id: 'parent',
-      status: ETaskStatus.DONE,
-    });
-    const child2 = task({
-      id: 'child2',
-      parent_task_id: 'parent',
-      status: ETaskStatus.PENDING,
-    });
-    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([]);
+  it('derives DONE when HOLD children are mixed in but the rest are DONE', () => {
+    expect(
+      deriveFor(ETaskStatus.PENDING, [ETaskStatus.DONE, ETaskStatus.HOLD]),
+    ).toBe(ETaskStatus.DONE);
   });
 
-  it('is a no-op when the parent is already DONE', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.DONE });
-    const child = task({
-      id: 'child',
-      parent_task_id: 'parent',
-      status: ETaskStatus.DONE,
-    });
-    expect(computeParentStatusRollup([parent, child])).toEqual([]);
+  it('derives IN_PROGRESS when a child is IN_PROGRESS', () => {
+    expect(
+      deriveFor(ETaskStatus.PENDING, [
+        ETaskStatus.IN_PROGRESS,
+        ETaskStatus.PENDING,
+      ]),
+    ).toBe(ETaskStatus.IN_PROGRESS);
   });
 
-  it('cascades a 3-level promotion up to the root', () => {
+  it('derives IN_PROGRESS when some (not all) non-HOLD children are DONE', () => {
+    expect(
+      deriveFor(ETaskStatus.PENDING, [ETaskStatus.DONE, ETaskStatus.PENDING]),
+    ).toBe(ETaskStatus.IN_PROGRESS);
+  });
+
+  it('derives HOLD when every child is HOLD', () => {
+    expect(
+      deriveFor(ETaskStatus.PENDING, [ETaskStatus.HOLD, ETaskStatus.HOLD]),
+    ).toBe(ETaskStatus.HOLD);
+  });
+
+  it('leaves PENDING unchanged when nothing has started', () => {
+    expect(
+      deriveFor(ETaskStatus.PENDING, [
+        ETaskStatus.PENDING,
+        ETaskStatus.PENDING,
+      ]),
+    ).toBeUndefined();
+  });
+
+  it('is a no-op when the parent already matches the derived status', () => {
+    expect(
+      deriveFor(ETaskStatus.DONE, [ETaskStatus.DONE, ETaskStatus.DONE]),
+    ).toBeUndefined();
+  });
+
+  it('moves a HOLD parent to DONE once all its children are DONE (re-derivation overrides HOLD)', () => {
+    expect(
+      deriveFor(ETaskStatus.HOLD, [ETaskStatus.DONE, ETaskStatus.DONE]),
+    ).toBe(ETaskStatus.DONE);
+  });
+
+  it('cascades a 3-level DONE promotion up to the root', () => {
     const root = task({ id: 'root', status: ETaskStatus.PENDING });
     const mid = task({
       id: 'mid',
@@ -261,62 +288,79 @@ describe('computeParentStatusRollup', () => {
       parent_task_id: 'mid',
       status: ETaskStatus.DONE,
     });
-    const promoted = computeParentStatusRollup([root, mid, leaf]);
-    expect(promoted).toEqual(expect.arrayContaining(['mid', 'root']));
-    expect(promoted).toHaveLength(2);
+    const changes = computeParentStatusRollup([root, mid, leaf]);
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { id: 'mid', status: ETaskStatus.DONE },
+        { id: 'root', status: ETaskStatus.DONE },
+      ]),
+    );
+    expect(changes).toHaveLength(2);
   });
 
-  it('ignores HOLD children when checking completeness', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
-    const child1 = task({
-      id: 'child1',
-      parent_task_id: 'parent',
+  it('cascades a 3-level IN_PROGRESS promotion up to the root', () => {
+    const root = task({ id: 'root', status: ETaskStatus.PENDING });
+    const mid = task({
+      id: 'mid',
+      parent_task_id: 'root',
+      status: ETaskStatus.PENDING,
+    });
+    const leaf = task({
+      id: 'leaf',
+      parent_task_id: 'mid',
+      status: ETaskStatus.IN_PROGRESS,
+    });
+    const changes = computeParentStatusRollup([root, mid, leaf]);
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { id: 'mid', status: ETaskStatus.IN_PROGRESS },
+        { id: 'root', status: ETaskStatus.IN_PROGRESS },
+      ]),
+    );
+    expect(changes).toHaveLength(2);
+  });
+
+  it('excludes a task explicitly changed this request, but still propagates its explicit status to the parent', () => {
+    const root = task({ id: 'root', status: ETaskStatus.PENDING });
+    const mid = task({
+      id: 'mid',
+      parent_task_id: 'root',
       status: ETaskStatus.DONE,
     });
-    const child2 = task({
-      id: 'child2',
-      parent_task_id: 'parent',
-      status: ETaskStatus.HOLD,
+    const leaf = task({
+      id: 'leaf',
+      parent_task_id: 'mid',
+      status: ETaskStatus.PENDING,
     });
-    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([
-      'parent',
-    ]);
+    const changes = computeParentStatusRollup(
+      [root, mid, leaf],
+      new Set(['mid']),
+    );
+    // `mid` itself is left alone (explicitly changed this request)...
+    expect(changes.find((c) => c.id === 'mid')).toBeUndefined();
+    // ...but `root` still derives from mid's explicit DONE status.
+    expect(changes).toEqual([{ id: 'root', status: ETaskStatus.DONE }]);
   });
 
-  it('does not promote when every child is HOLD (needs >=1 non-held child)', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
-    const child1 = task({
-      id: 'child1',
-      parent_task_id: 'parent',
-      status: ETaskStatus.HOLD,
+  it('still re-derives parents nested below an explicitly-changed ancestor', () => {
+    // root (explicitly changed) > mid > leaf(DONE): mid must still be derived
+    // even though its ancestor root is pinned.
+    const root = task({ id: 'root', status: ETaskStatus.HOLD });
+    const mid = task({
+      id: 'mid',
+      parent_task_id: 'root',
+      status: ETaskStatus.PENDING,
     });
-    const child2 = task({
-      id: 'child2',
-      parent_task_id: 'parent',
-      status: ETaskStatus.HOLD,
-    });
-    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([]);
-  });
-
-  it('never promotes a HOLD parent even if all its children are DONE', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.HOLD });
-    const child = task({
-      id: 'child',
-      parent_task_id: 'parent',
+    const leaf = task({
+      id: 'leaf',
+      parent_task_id: 'mid',
       status: ETaskStatus.DONE,
     });
-    expect(computeParentStatusRollup([parent, child])).toEqual([]);
-  });
-
-  it('excludes a task explicitly changed this request', () => {
-    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
-    const child = task({
-      id: 'child',
-      parent_task_id: 'parent',
-      status: ETaskStatus.DONE,
-    });
-    expect(
-      computeParentStatusRollup([parent, child], new Set(['parent'])),
-    ).toEqual([]);
+    const changes = computeParentStatusRollup(
+      [root, mid, leaf],
+      new Set(['root']),
+    );
+    expect(changes.find((c) => c.id === 'root')).toBeUndefined();
+    expect(changes).toEqual([{ id: 'mid', status: ETaskStatus.DONE }]);
   });
 });

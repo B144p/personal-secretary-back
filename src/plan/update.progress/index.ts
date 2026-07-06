@@ -123,8 +123,8 @@ export class UpdateProgressService {
     );
     await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
 
-    // 4b. Roll parent statuses up: any parent whose non-held children are all
-    // DONE becomes DONE too (cascades up multiple levels). Best-effort.
+    // 4b. Re-derive each parent's status (DONE / IN_PROGRESS / HOLD /
+    // PENDING) from its children, cascading up multiple levels. Best-effort.
     const changedTaskIds = new Set(statusChanges.map((sc) => sc.taskId));
     await applyParentStatusRollup(plan.id, allTasks, changedTaskIds, deps);
 
