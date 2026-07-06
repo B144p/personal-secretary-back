@@ -15,6 +15,7 @@ import {
 } from './classify';
 import {
   applyDoneMarkers,
+  applyParentStatusRollup,
   applyRuleReschedule,
   applyStatusChanges,
   cleanupHeldLeaves,
@@ -121,6 +122,11 @@ export class UpdateProgressService {
       now,
     );
     await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
+
+    // 4b. Roll parent statuses up: any parent whose non-held children are all
+    // DONE becomes DONE too (cascades up multiple levels). Best-effort.
+    const changedTaskIds = new Set(statusChanges.map((sc) => sc.taskId));
+    await applyParentStatusRollup(plan.id, allTasks, changedTaskIds, deps);
 
     // 5. Check if all non-held leaves are DONE → mark plan DONE. Held leaves
     // are skipped for completion purposes; an all-held plan stays stalled

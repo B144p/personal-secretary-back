@@ -146,3 +146,53 @@ export const classifyLeaves = <T extends StatusClassifiable>({
 
   return { slippedLeaves, completedEarly, completedLate, remainingLeaves };
 };
+
+// Bottom-up: a parent whose non-HOLD children are all done (recursively)
+// should itself become DONE, cascading up multiple levels. HOLD children are
+// ignored — same rule as allNonHeldLeavesDone ("an all-held plan stays
+// stalled"). Tasks already changed explicitly this request are left alone.
+// Returns the ids of tasks that should be promoted to DONE.
+export const computeParentStatusRollup = <
+  T extends Pick<StatusClassifiable, 'id' | 'parent_task_id' | 'status'>,
+>(
+  allTasks: T[],
+  explicitlyChangedIds: Set<string> = new Set(),
+): string[] => {
+  const byParent = new Map<string | null, T[]>();
+  for (const t of allTasks) {
+    if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
+    byParent.get(t.parent_task_id)!.push(t);
+  }
+
+  const promoted: string[] = [];
+
+  // Returns whether this task's subtree is "effectively done" (its own
+  // status is DONE, or it should be promoted to DONE).
+  const resolve = (task: T): boolean => {
+    const children = byParent.get(task.id) ?? [];
+    if (children.length === 0) return task.status === ETaskStatus.DONE;
+
+    const results = children.map((c) => ({ child: c, done: resolve(c) }));
+    const considered = results.filter(
+      ({ child }) => child.status !== ETaskStatus.HOLD,
+    );
+    const shouldBeDone =
+      considered.length > 0 && considered.every(({ done }) => done);
+
+    if (
+      shouldBeDone &&
+      task.status !== ETaskStatus.DONE &&
+      task.status !== ETaskStatus.HOLD &&
+      !explicitlyChangedIds.has(task.id)
+    ) {
+      promoted.push(task.id);
+    }
+
+    return shouldBeDone || task.status === ETaskStatus.DONE;
+  };
+
+  const roots = byParent.get(null) ?? [];
+  for (const root of roots) resolve(root);
+
+  return promoted;
+};

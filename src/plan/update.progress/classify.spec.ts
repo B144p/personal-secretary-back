@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import {
   allNonHeldLeavesDone,
   classifyLeaves,
+  computeParentStatusRollup,
   findHeldLeavesWithFutureEvents,
   getLeafIds,
 } from './classify';
@@ -202,5 +203,120 @@ describe('classifyLeaves', () => {
     });
     expect(result.slippedLeaves).toEqual([]);
     expect(result.remainingLeaves).toEqual([child]);
+  });
+});
+
+describe('computeParentStatusRollup', () => {
+  it('promotes a parent when all children are DONE', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
+    const child1 = task({
+      id: 'child1',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    const child2 = task({
+      id: 'child2',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([
+      'parent',
+    ]);
+  });
+
+  it('does not promote when a child is not DONE', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
+    const child1 = task({
+      id: 'child1',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    const child2 = task({
+      id: 'child2',
+      parent_task_id: 'parent',
+      status: ETaskStatus.PENDING,
+    });
+    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([]);
+  });
+
+  it('is a no-op when the parent is already DONE', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.DONE });
+    const child = task({
+      id: 'child',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    expect(computeParentStatusRollup([parent, child])).toEqual([]);
+  });
+
+  it('cascades a 3-level promotion up to the root', () => {
+    const root = task({ id: 'root', status: ETaskStatus.PENDING });
+    const mid = task({
+      id: 'mid',
+      parent_task_id: 'root',
+      status: ETaskStatus.PENDING,
+    });
+    const leaf = task({
+      id: 'leaf',
+      parent_task_id: 'mid',
+      status: ETaskStatus.DONE,
+    });
+    const promoted = computeParentStatusRollup([root, mid, leaf]);
+    expect(promoted).toEqual(expect.arrayContaining(['mid', 'root']));
+    expect(promoted).toHaveLength(2);
+  });
+
+  it('ignores HOLD children when checking completeness', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
+    const child1 = task({
+      id: 'child1',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    const child2 = task({
+      id: 'child2',
+      parent_task_id: 'parent',
+      status: ETaskStatus.HOLD,
+    });
+    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([
+      'parent',
+    ]);
+  });
+
+  it('does not promote when every child is HOLD (needs >=1 non-held child)', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
+    const child1 = task({
+      id: 'child1',
+      parent_task_id: 'parent',
+      status: ETaskStatus.HOLD,
+    });
+    const child2 = task({
+      id: 'child2',
+      parent_task_id: 'parent',
+      status: ETaskStatus.HOLD,
+    });
+    expect(computeParentStatusRollup([parent, child1, child2])).toEqual([]);
+  });
+
+  it('never promotes a HOLD parent even if all its children are DONE', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.HOLD });
+    const child = task({
+      id: 'child',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    expect(computeParentStatusRollup([parent, child])).toEqual([]);
+  });
+
+  it('excludes a task explicitly changed this request', () => {
+    const parent = task({ id: 'parent', status: ETaskStatus.PENDING });
+    const child = task({
+      id: 'child',
+      parent_task_id: 'parent',
+      status: ETaskStatus.DONE,
+    });
+    expect(
+      computeParentStatusRollup([parent, child], new Set(['parent'])),
+    ).toEqual([]);
   });
 });

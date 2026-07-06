@@ -9,7 +9,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { withRetry } from 'src/utils';
 import { computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
-import { orderLeavesByTree } from './classify';
+import { computeParentStatusRollup, orderLeavesByTree } from './classify';
 import type { IStatusChange, LeafTask, PlanWithTasks } from './interface';
 
 dayjs.extend(utc);
@@ -104,6 +104,31 @@ export const cleanupHeldLeaves = async (
   } catch (err) {
     logger.warn(
       'Failed to clean up calendar event(s) for held task(s)',
+      err instanceof Error ? err.stack : String(err),
+    );
+  }
+};
+
+// Step 4b. Roll parent statuses up: any parent whose non-held children are
+// all DONE becomes DONE too, cascading up multiple levels. Best-effort —
+// a rollup failure must not turn the already-committed status changes into
+// a 500 for the caller.
+export const applyParentStatusRollup = async (
+  planId: string,
+  allTasks: LeafTask[],
+  explicitlyChangedIds: Set<string>,
+  { prisma, logger }: Pick<StepDeps, 'prisma' | 'logger'>,
+): Promise<void> => {
+  const promotedIds = computeParentStatusRollup(allTasks, explicitlyChangedIds);
+  if (promotedIds.length === 0) return;
+  try {
+    await prisma.task.updateMany({
+      where: { id: { in: promotedIds }, plan_id: planId },
+      data: { status: ETaskStatus.DONE },
+    });
+  } catch (err) {
+    logger.warn(
+      'Failed to roll parent task status up to DONE',
       err instanceof Error ? err.stack : String(err),
     );
   }
