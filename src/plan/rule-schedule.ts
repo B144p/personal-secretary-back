@@ -31,6 +31,22 @@ export interface IRuleSchedulePlacement {
   end: string;
 }
 
+// Converts raw Google Calendar event results into the busy intervals
+// computeRuleSchedule expects, dropping all-day/otherwise non-timed events
+// (empty dateTime) that would otherwise produce an Invalid Date.
+export const buildBusyIntervals = (
+  results: Array<{
+    start?: { dateTime?: string | null } | null;
+    end?: { dateTime?: string | null } | null;
+  }>,
+): IBusyInterval[] =>
+  results
+    .filter((e) => !!e.start?.dateTime && !!e.end?.dateTime)
+    .map((e) => ({
+      start: dayjs(e.start!.dateTime),
+      end: dayjs(e.end!.dateTime),
+    }));
+
 const atWorkingStart = (day: dayjs.Dayjs, state: UserState): dayjs.Dayjs => {
   const [startHour, startMin = 0] = state.working_hours_start
     .split(':')

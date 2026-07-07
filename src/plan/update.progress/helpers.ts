@@ -7,7 +7,7 @@ import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { withRetry } from 'src/utils';
-import { computeRuleSchedule } from '../rule-schedule';
+import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 import { computeParentStatusRollup, orderLeavesByTree } from './classify';
 import type { IStatusChange, LeafTask, PlanWithTasks } from './interface';
@@ -216,12 +216,7 @@ export const applyRuleReschedule = async (
     // be told to "preserve", now used directly to pack the schedule.
     const orderedLeaves = orderLeavesByTree(allTasks, remainingLeaves);
 
-    const busyIntervals = calendarEvents.results
-      .filter((e) => !!e.start?.dateTime && !!e.end?.dateTime)
-      .map((e) => ({
-        start: dayjs(e.start!.dateTime),
-        end: dayjs(e.end!.dateTime),
-      }));
+    const busyIntervals = buildBusyIntervals(calendarEvents.results);
 
     const { placements, unschedulableTaskIds } = computeRuleSchedule({
       tasks: orderedLeaves.map((t) => ({

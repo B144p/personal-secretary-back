@@ -2,7 +2,7 @@ import { UserState } from '@prisma/client';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
-import { computeRuleSchedule } from './rule-schedule';
+import { buildBusyIntervals, computeRuleSchedule } from './rule-schedule';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -163,5 +163,42 @@ describe('computeRuleSchedule', () => {
 
     expect(placements).toEqual([]);
     expect(unschedulableTaskIds).toEqual(['too-long']);
+  });
+});
+
+describe('buildBusyIntervals', () => {
+  it('maps timed events into dayjs busy intervals', () => {
+    const intervals = buildBusyIntervals([
+      {
+        start: { dateTime: '2026-07-06T10:00:00+07:00' },
+        end: { dateTime: '2026-07-06T11:00:00+07:00' },
+      },
+    ]);
+    expect(intervals).toHaveLength(1);
+    expect(intervals[0].start.isSame(dayjs('2026-07-06T10:00:00+07:00'))).toBe(
+      true,
+    );
+    expect(intervals[0].end.isSame(dayjs('2026-07-06T11:00:00+07:00'))).toBe(
+      true,
+    );
+  });
+
+  it('skips all-day / non-timed events (missing dateTime)', () => {
+    const intervals = buildBusyIntervals([
+      {
+        start: { date: '2026-07-06' } as never,
+        end: { date: '2026-07-07' } as never,
+      },
+      { start: null, end: null },
+      { start: undefined, end: undefined },
+    ]);
+    expect(intervals).toEqual([]);
+  });
+
+  it('skips an event with only one side timed', () => {
+    const intervals = buildBusyIntervals([
+      { start: { dateTime: '2026-07-06T10:00:00+07:00' }, end: {} },
+    ]);
+    expect(intervals).toEqual([]);
   });
 });
