@@ -1,25 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { EPlanStatus, UserState } from '@prisma/client';
+import { EPlanStatus } from '@prisma/client';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
 import utc from 'dayjs/plugin/utc';
-import OpenAI from 'openai';
 import pLimit from 'p-limit';
-import { AiTask, getModelForTask, IAiTaskModels } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
-import { OpenAIClientFactory } from 'src/openai/openai-client.factory';
-import { validateOpenAIResponse } from 'src/openai/utils';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { UserService } from 'src/user/user.service';
 import { withRetry } from 'src/utils';
-import { z } from 'zod';
 import { ITaskScheduleProps } from '../interfaces';
-import {
-  generateScheduleResponseSchema,
-  IGenerateScheduleResponse,
-} from '../schemas';
-import { schedulePrompt } from './prompt';
+import { selectSchedulableLeavesInOrder } from '../leaf-select';
+import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
+import { buildActiveTaskEventWrite } from '../task-event.write';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -33,17 +25,15 @@ export class CalendarScheduleService {
   private readonly schedulingLocks = new Set<string>();
 
   constructor(
-    private readonly openaiFactory: OpenAIClientFactory,
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
-    private readonly userService: UserService,
   ) {}
 
   async generateAndApplyTaskSchedule(props: ITaskScheduleProps) {
-    // Guard against a second concurrent call (e.g. double-click, retry after
-    // a slow AI response) scheduling the same plan twice — each call creates
-    // real Google Calendar events before persisting, so a race here would
-    // leave one attempt's calendar events orphaned with no DB record.
+    // Guard against a second concurrent call (e.g. double-click, retry)
+    // scheduling the same plan twice — each call creates real Google Calendar
+    // events before persisting, so a race here would leave one attempt's
+    // calendar events orphaned with no DB record.
     if (this.schedulingLocks.has(props.id)) {
       throw new AppException(
         AppErrorCode.SCHEDULING_IN_PROGRESS,
@@ -96,36 +86,62 @@ export class CalendarScheduleService {
       range,
     });
 
-    const client = await this.openaiFactory.forUser(userId);
-    const models = await this.userService.getAiModels(userId);
-    const generatedSchedule = await generateLeafSchedule({
-      client,
-      models,
-      calendar: calendarEvents,
-      plan,
+    // plan.tasks is already in DFS tree order (sequence_order preserved) —
+    // pack them back-to-back into the earliest legal slots.
+    const busyIntervals = buildBusyIntervals(calendarEvents.results);
+    const { placements } = computeRuleSchedule({
+      tasks: plan.tasks.map((t) => ({
+        id: t.id,
+        estimated_minutes: t.estimated_minutes,
+      })),
+      busyIntervals,
       userState,
     });
+
+    const leafById = new Map(plan.tasks.map((t) => [t.id, t]));
+    const schedule: IScheduledLeaf[] = placements.map((p) => ({
+      id: p.taskId,
+      title: leafById.get(p.taskId)!.title,
+      description: leafById.get(p.taskId)!.description,
+      start: p.start,
+      end: p.end,
+    }));
 
     const { taskEvents } = await applySchedule({
       userId,
       planId: id,
       client: this.calendarService,
       timeZone: userState.time_zone,
-      data: generatedSchedule,
+      schedule,
     });
+
+    // Reuse each task's most recent inactive TaskEvent row (left behind by a prior
+    // pause) instead of inserting a new one, so pause→resume cycles don't accumulate
+    // dead rows. First-time scheduling has no prior row → create. is_active:false
+    // filter guarantees we never clobber a live event.
+    const reusableRows = await this.prisma.taskEvent.findMany({
+      where: {
+        task_id: { in: taskEvents.map((e) => e.taskId) },
+        is_active: false,
+      },
+      orderBy: { created_at: 'desc' },
+    });
+    const reuseIdByTask = new Map<string, string>();
+    for (const row of reusableRows) {
+      if (!reuseIdByTask.has(row.task_id))
+        reuseIdByTask.set(row.task_id, row.id);
+    }
 
     // Persist TaskEvents + update plan status in a transaction
     try {
       await this.prisma.$transaction([
-        ...taskEvents.map(({ taskId, googleEventId, start, end }) =>
-          this.prisma.taskEvent.create({
-            data: {
-              task_id: taskId,
-              google_event_id: googleEventId,
-              start: new Date(start),
-              end: new Date(end),
-              is_active: true,
-            },
+        ...taskEvents.flatMap(({ taskId, googleEventId, start, end }) =>
+          buildActiveTaskEventWrite(this.prisma, {
+            taskId,
+            googleEventId,
+            start,
+            end,
+            reuseRowId: reuseIdByTask.get(taskId),
           }),
         ),
         this.prisma.plan.update({
@@ -162,6 +178,7 @@ export class CalendarScheduleService {
           select: {
             id: true,
             title: true,
+            description: true,
             status: true,
             estimated_minutes: true,
             sequence_order: true,
@@ -173,31 +190,12 @@ export class CalendarScheduleService {
     });
     if (!plan) return null;
 
-    type PlanTask = (typeof plan.tasks)[number];
-    const parentIds = new Set(
-      plan.tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
-    );
-
-    // DFS traversal so leaves come out in true tree order (parent sequence preserved)
-    const byParent = new Map<string | null, PlanTask[]>();
-    for (const t of plan.tasks) {
-      if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
-      byParent.get(t.parent_task_id)!.push(t);
-    }
-    const leaves: PlanTask[] = [];
-    const visit = (parentId: string | null) => {
-      const children = (byParent.get(parentId) ?? []).sort(
-        (a, b) => a.sequence_order - b.sequence_order,
-      );
-      for (const child of children) {
-        if (parentIds.has(child.id)) {
-          visit(child.id);
-        } else if (child.status === 'PENDING') {
-          leaves.push(child);
-        }
-      }
-    };
-    visit(null);
+    // Schedulable leaves (not DONE/HOLD) in DFS tree order — shared with the
+    // reschedule path so the two can't silently drift on "what needs a slot"
+    // (this matters most on resume, where pause already cleared incomplete
+    // leaves' events: an IN_PROGRESS leaf must be re-scheduled too, not just
+    // PENDING ones).
+    const leaves = selectSchedulableLeavesInOrder(plan.tasks);
 
     return { id: plan.id, title: plan.title, tasks: leaves };
   }
@@ -266,244 +264,23 @@ type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & {
   client: CalendarService;
 };
 
-// ─── AI scheduling ────────────────────────────────────────────────────────────
-
-const generateLeafSchedule = async ({
-  client,
-  models,
-  plan,
-  calendar,
-  userState,
-}: IGenerateLeafSchedule) => {
-  const mapToRefs = (tasks: IGenerateLeafSchedule['plan']['tasks']) => {
-    const refMap: Record<string, (typeof tasks)[number]> = {};
-    const mapped = tasks.map((task, index) => {
-      const ref = `T${index + 1}`;
-      refMap[ref] = task;
-      return {
-        task_ref: ref,
-        title: task.title,
-        estimated_minutes: task.estimated_minutes,
-      };
-    });
-    return { mapped, refMap };
-  };
-
-  const mapBack = (
-    refMap: ReturnType<typeof mapToRefs>['refMap'],
-    schedule: IGenerateScheduleResponse['schedule'],
-  ) => ({
-    schedule: schedule.map(({ task_ref, ...rest }) => ({
-      ...rest,
-      ...refMap[task_ref],
-    })),
-  });
-
-  const refMapData = mapToRefs(plan.tasks);
-  const userConstraints = buildUserConstraints(userState);
-
-  const earliest = getEarliestScheduleTime(userState);
-  const scheduleAfter = earliest.format(); // preserves timezone offset (e.g. +07:00)
-
-  const callAI = (correctionMsg?: string) =>
-    client.responses.parse({
-      model: getModelForTask(AiTask.SCHEDULING, models),
-      input: [
-        {
-          role: 'system',
-          content: Object.values(schedulePrompt.system).map((text) => ({
-            type: 'input_text' as const,
-            text,
-          })),
-        },
-        {
-          role: 'developer',
-          content: [
-            ...Object.values(schedulePrompt.developer).map((text) => ({
-              type: 'input_text' as const,
-              text: text.replace('{{minTaskDurationMin}}', '15'),
-            })),
-            { type: 'input_text' as const, text: userConstraints },
-          ],
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'input_text' as const,
-              text: `#EARLIEST START TIME: ${scheduleAfter} (${earliest.format('YYYY-MM-DD HH:mm')} ${userState.time_zone}) — do not schedule any task before this moment.`,
-            },
-            {
-              type: 'input_text' as const,
-              text: `#TASKS: ${JSON.stringify({ tasks: refMapData.mapped })}`,
-            },
-            {
-              type: 'input_text' as const,
-              text: `#EXISTING SCHEDULE: ${JSON.stringify({ schedule: calendar.results })}`,
-            },
-            ...(correctionMsg
-              ? [{ type: 'input_text' as const, text: correctionMsg }]
-              : []),
-          ],
-        },
-      ],
-      text: {
-        format: {
-          type: 'json_schema',
-          name: 'category_rule',
-          strict: true,
-          schema: z.toJSONSchema(generateScheduleResponseSchema),
-        },
-      },
-    });
-
-  let llmRes = await callAI();
-  let { schedule, ...restParsed } = validateOpenAIResponse(
-    generateScheduleResponseSchema,
-    llmRes.output_parsed,
-  );
-  let validationError = validateSchedule(
-    schedule,
-    refMapData.mapped,
-    userState,
-  );
-
-  if (validationError) {
-    llmRes = await callAI(`VALIDATION ERROR — please fix: ${validationError}`);
-    ({ schedule, ...restParsed } = validateOpenAIResponse(
-      generateScheduleResponseSchema,
-      llmRes.output_parsed,
-    ));
-    validationError = validateSchedule(schedule, refMapData.mapped, userState);
-    if (validationError) {
-      throw new AppException(
-        AppErrorCode.SCHEDULING_INFEASIBLE,
-        `Schedule validation failed after retry: ${validationError}`,
-      );
-    }
-  }
-
-  return {
-    usage: llmRes.usage,
-    outputFormat: { ...restParsed, ...mapBack(refMapData.refMap, schedule) },
-  };
-};
-
-const getEarliestScheduleTime = (state: UserState): dayjs.Dayjs => {
-  const now = dayjs().tz(state.time_zone).add(2, 'minute');
-  const [startHour, startMin = 0] = state.working_hours_start
-    .split(':')
-    .map(Number);
-  const [endHour] = state.working_hours_end.split(':').map(Number);
-
-  if (!state.days_off.includes(now.day())) {
-    const todayStart = now
-      .startOf('day')
-      .hour(startHour)
-      .minute(startMin)
-      .second(0);
-    const todayEnd = now.startOf('day').hour(endHour).minute(0).second(0);
-
-    if (now.isBefore(todayStart)) return todayStart; // too early — wait for working hours today
-    if (now.isBefore(todayEnd)) return now; // within working hours — start now
-  }
-
-  // After working hours or today is a day off — find next working day
-  let next = now
-    .startOf('day')
-    .add(1, 'day')
-    .hour(startHour)
-    .minute(startMin)
-    .second(0);
-  while (state.days_off.includes(next.day())) {
-    next = next.add(1, 'day');
-  }
-  return next;
-};
-
-const buildUserConstraints = (state: UserState) => `
-## USER WORKING CONSTRAINTS
-- Timezone: '${state.time_zone}'
-- Working hours: ${state.working_hours_start} to ${state.working_hours_end} (local time)
-- Days off: [${state.days_off.join(', ')}] (0=Sunday … 6=Saturday)
-Only schedule within these constraints.
-`;
-
-const validateSchedule = (
-  schedule: IGenerateScheduleResponse['schedule'],
-  tasks: { task_ref: string; estimated_minutes: number | null }[],
-  userState: UserState,
-): string | null => {
-  const taskMap = Object.fromEntries(tasks.map((t) => [t.task_ref, t]));
-  // Allow 3-minute grace period so API latency doesn't cause false failures
-  const earliest = dayjs().subtract(3, 'minute');
-
-  for (const item of schedule) {
-    const start = dayjs(item.start);
-    const end = dayjs(item.end);
-
-    if (start.isBefore(earliest))
-      return `Task ${item.task_ref} starts in the past`;
-
-    const startLocal = start.tz(userState.time_zone);
-    const endLocal = end.tz(userState.time_zone);
-    const [wStart] = userState.working_hours_start.split(':').map(Number);
-    const [wEnd] = userState.working_hours_end.split(':').map(Number);
-    if (startLocal.hour() < wStart || endLocal.hour() > wEnd) {
-      return `Task ${item.task_ref} is outside working hours`;
-    }
-
-    if (userState.days_off.includes(startLocal.day())) {
-      return `Task ${item.task_ref} falls on a day off`;
-    }
-
-    const task = taskMap[item.task_ref];
-    if (task?.estimated_minutes) {
-      const durationMin = end.diff(start, 'minute');
-      const tolerance = Math.max(15, task.estimated_minutes * 0.1);
-      if (Math.abs(durationMin - task.estimated_minutes) > tolerance) {
-        return `Task ${item.task_ref} duration mismatch: expected ${task.estimated_minutes}m, got ${durationMin}m`;
-      }
-    }
-  }
-
-  // Check overlaps
-  const sorted = [...schedule].sort(
-    (a, b) => dayjs(a.start).valueOf() - dayjs(b.start).valueOf(),
-  );
-  for (let i = 1; i < sorted.length; i++) {
-    if (dayjs(sorted[i].start).isBefore(dayjs(sorted[i - 1].end))) {
-      return `Tasks ${sorted[i - 1].task_ref} and ${sorted[i].task_ref} overlap`;
-    }
-  }
-
-  return null;
-};
-
-interface IGenerateLeafSchedule {
-  client: OpenAI;
-  models: IAiTaskModels;
-  plan: Exclude<
-    Awaited<ReturnType<CalendarScheduleService['getLeafTasks']>>,
-    null
-  >;
-  calendar: Awaited<ReturnType<typeof getCalendarWithScope>>;
-  userState: UserState;
-}
-
 // ─── Apply schedule ────────────────────────────────────────────────────────────
+
+interface IScheduledLeaf {
+  id: string;
+  title: string;
+  description: string | null;
+  start: string;
+  end: string;
+}
 
 const applySchedule = async ({
   userId,
   planId,
   client,
   timeZone,
-  data,
+  schedule,
 }: IScheduleEventToCalendar) => {
-  const {
-    outputFormat: { schedule },
-  } = data;
-
   const results = await Promise.all(
     schedule.map((record) =>
       limit(() =>
@@ -535,7 +312,7 @@ interface IScheduleEventToCalendar {
   userId: string;
   timeZone: string;
   client: CalendarService;
-  data: Awaited<ReturnType<typeof generateLeafSchedule>>;
+  schedule: IScheduledLeaf[];
 }
 
 const insertCalendarEvent = async ({
@@ -554,6 +331,7 @@ const insertCalendarEvent = async ({
         calendarId: 'primary',
         requestBody: {
           summary: event.title,
+          description: event.description ?? undefined,
           start: { dateTime: event.start, timeZone },
           end: { dateTime: event.end, timeZone },
           extendedProperties: { private: privateProperties },
@@ -572,5 +350,5 @@ interface IInsertCalendarEvent
     IScheduleEventToCalendar,
     'userId' | 'planId' | 'client' | 'timeZone'
   > {
-  event: IScheduleEventToCalendar['data']['outputFormat']['schedule'][number];
+  event: IScheduledLeaf;
 }
