@@ -9,6 +9,7 @@ import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { withRetry } from 'src/utils';
 import { ITaskScheduleProps } from '../interfaces';
+import { selectSchedulableLeavesInOrder } from '../leaf-select';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 
@@ -187,31 +188,12 @@ export class CalendarScheduleService {
     });
     if (!plan) return null;
 
-    type PlanTask = (typeof plan.tasks)[number];
-    const parentIds = new Set(
-      plan.tasks.map((t) => t.parent_task_id).filter(Boolean) as string[],
-    );
-
-    // DFS traversal so leaves come out in true tree order (parent sequence preserved)
-    const byParent = new Map<string | null, PlanTask[]>();
-    for (const t of plan.tasks) {
-      if (!byParent.has(t.parent_task_id)) byParent.set(t.parent_task_id, []);
-      byParent.get(t.parent_task_id)!.push(t);
-    }
-    const leaves: PlanTask[] = [];
-    const visit = (parentId: string | null) => {
-      const children = (byParent.get(parentId) ?? []).sort(
-        (a, b) => a.sequence_order - b.sequence_order,
-      );
-      for (const child of children) {
-        if (parentIds.has(child.id)) {
-          visit(child.id);
-        } else if (child.status === 'PENDING') {
-          leaves.push(child);
-        }
-      }
-    };
-    visit(null);
+    // Schedulable leaves (not DONE/HOLD) in DFS tree order — shared with the
+    // reschedule path so the two can't silently drift on "what needs a slot"
+    // (this matters most on resume, where pause already cleared incomplete
+    // leaves' events: an IN_PROGRESS leaf must be re-scheduled too, not just
+    // PENDING ones).
+    const leaves = selectSchedulableLeavesInOrder(plan.tasks);
 
     return { id: plan.id, title: plan.title, tasks: leaves };
   }

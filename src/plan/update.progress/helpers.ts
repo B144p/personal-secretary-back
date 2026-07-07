@@ -7,9 +7,10 @@ import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { withRetry } from 'src/utils';
+import { orderLeavesByTree } from '../leaf-select';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
-import { computeParentStatusRollup, orderLeavesByTree } from './classify';
+import { computeParentStatusRollup } from './classify';
 import type { IStatusChange, LeafTask, PlanWithTasks } from './interface';
 
 dayjs.extend(utc);

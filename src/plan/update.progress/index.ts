@@ -7,11 +7,11 @@ import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CalendarScheduleService } from '../calendar.schedule';
+import { getLeafIds } from '../leaf-select';
 import {
   allNonHeldLeavesDone,
   classifyLeaves,
   findHeldLeavesWithFutureEvents,
-  getLeafIds,
 } from './classify';
 import {
   applyDoneMarkers,

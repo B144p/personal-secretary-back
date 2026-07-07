@@ -1,11 +1,11 @@
 import { ETaskStatus } from '@prisma/client';
 import dayjs from 'dayjs';
+import { getLeafIds } from '../leaf-select';
 import {
   allNonHeldLeavesDone,
   classifyLeaves,
   computeParentStatusRollup,
   findHeldLeavesWithFutureEvents,
-  getLeafIds,
 } from './classify';
 
 const now = dayjs('2026-07-06T12:00:00Z');
@@ -24,16 +24,6 @@ const task = (overrides: Partial<FakeTask> & { id: string }): FakeTask => ({
   status: ETaskStatus.PENDING,
   events: [],
   ...overrides,
-});
-
-describe('getLeafIds', () => {
-  it('excludes tasks that have children', () => {
-    const tasks = [
-      task({ id: 'parent' }),
-      task({ id: 'child', parent_task_id: 'parent' }),
-    ];
-    expect(getLeafIds(tasks)).toEqual(new Set(['child']));
-  });
 });
 
 describe('findHeldLeavesWithFutureEvents', () => {
