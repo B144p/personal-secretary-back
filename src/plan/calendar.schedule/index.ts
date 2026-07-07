@@ -102,6 +102,7 @@ export class CalendarScheduleService {
     const schedule: IScheduledLeaf[] = placements.map((p) => ({
       id: p.taskId,
       title: leafById.get(p.taskId)!.title,
+      description: leafById.get(p.taskId)!.description,
       start: p.start,
       end: p.end,
     }));
@@ -177,6 +178,7 @@ export class CalendarScheduleService {
           select: {
             id: true,
             title: true,
+            description: true,
             status: true,
             estimated_minutes: true,
             sequence_order: true,
@@ -267,6 +269,7 @@ type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & {
 interface IScheduledLeaf {
   id: string;
   title: string;
+  description: string | null;
   start: string;
   end: string;
 }
@@ -328,6 +331,7 @@ const insertCalendarEvent = async ({
         calendarId: 'primary',
         requestBody: {
           summary: event.title,
+          description: event.description ?? undefined,
           start: { dateTime: event.start, timeZone },
           end: { dateTime: event.end, timeZone },
           extendedProperties: { private: privateProperties },
