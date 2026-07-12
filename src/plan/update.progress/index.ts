@@ -14,10 +14,11 @@ import {
   findHeldLeavesWithFutureEvents,
 } from './classify';
 import {
-  applyDoneMarkers,
+  applyEarlyMarkers,
   applyParentStatusRollup,
   applyRuleReschedule,
   applyStatusChanges,
+  cleanupCompletedEarly,
   cleanupHeldLeaves,
   persistDailyFeedback,
   reconcileCalendar,
@@ -143,16 +144,27 @@ export class UpdateProgressService {
       };
     }
 
-    // 6. Classify what changed: slipped / completed-early / completed-late
-    // leaves, plus the full set of remaining leaves that still need a slot.
-    const { slippedLeaves, completedEarly, completedLate, remainingLeaves } =
-      classifyLeaves({ allTasks, leafIds, statusChanges, now });
+    // 6. Classify what changed: slipped / completed-early / completed-late /
+    // early (DONE, IN_PROGRESS or HOLD ahead of schedule) leaves, plus the
+    // full set of remaining leaves that still need a slot.
+    const {
+      slippedLeaves,
+      completedEarly,
+      completedLate,
+      remainingLeaves,
+      earlyLeaves,
+    } = classifyLeaves({ allTasks, leafIds, statusChanges, now });
 
+    // TODO: completedEarly.length === 0 is redundant here — completedEarly
+    // is always a subset of earlyLeaves (DONE is one of its three
+    // statuses), so earlyLeaves.length === 0 already implies it. Safe to
+    // drop; kept for now to avoid touching this gate mid-branch.
     if (
       slippedLeaves.length === 0 &&
       completedEarly.length === 0 &&
       completedLate.length === 0 &&
-      heldLeavesWithFutureEvents.length === 0
+      heldLeavesWithFutureEvents.length === 0 &&
+      earlyLeaves.length === 0
     ) {
       return {
         rescheduled: 0,
@@ -177,9 +189,15 @@ export class UpdateProgressService {
         deps,
       );
 
-    // 9. Record a marker event for tasks finished ahead of schedule. The
-    // original scheduled event is left untouched; best-effort like above.
-    await applyDoneMarkers(userId, plan.id, completedEarly, userState, deps);
+    // 9a. Early-completed (DONE) tasks have no other flow that removes their
+    // now-stale original event — HOLD-early is handled by cleanupHeldLeaves
+    // above, IN_PROGRESS-early is re-slotted by applyRuleReschedule above.
+    // Best-effort like the other cleanup steps.
+    await cleanupCompletedEarly(userId, completedEarly, deps);
+
+    // 9b. Record one marker event per status for leaves changed ahead of
+    // schedule (e.g. "[DONE] Early task" listing the tasks). Best-effort.
+    await applyEarlyMarkers(userId, plan.id, earlyLeaves, userState, deps);
 
     return {
       rescheduled: rescheduledCount,

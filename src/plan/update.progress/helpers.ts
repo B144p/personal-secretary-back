@@ -11,6 +11,7 @@ import { orderLeavesByTree } from '../leaf-select';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 import { computeParentStatusRollup } from './classify';
+import { buildEarlyMarkerGroups, type IEarlyMarkerTask } from './early-marker';
 import type { IStatusChange, LeafTask, PlanWithTasks } from './interface';
 
 dayjs.extend(utc);
@@ -355,27 +356,64 @@ export const applyRuleReschedule = async (
   return { rescheduledCount, unscheduledTaskIds, rescheduleFailed };
 };
 
-// Step 9. Record a marker event for tasks finished ahead of schedule. The
-// original scheduled event is left untouched; best-effort like above.
-export const applyDoneMarkers = async (
+// Step 8b. Early-completed tasks (DONE, ahead of their scheduled event) have
+// no other flow that cleans up their now-stale original event — HOLD-early
+// leaves are handled by cleanupHeldLeaves, IN_PROGRESS-early leaves are
+// re-slotted by applyRuleReschedule. Remove the original Google event and
+// deactivate its TaskEvent so only the "Early task" marker remains.
+// Best-effort — must not turn already-committed status changes into a 500.
+export const cleanupCompletedEarly = async (
   userId: string,
-  planId: string,
   completedEarly: LeafTask[],
-  userState: UserState,
-  { calendarService, logger }: Pick<StepDeps, 'calendarService' | 'logger'>,
+  { prisma, calendarService, logger }: StepDeps,
 ): Promise<void> => {
   if (completedEarly.length === 0) return;
   try {
-    await createDoneMarkerEvents({
+    const calClient = await calendarService.getClient(userId);
+    const eventIds = completedEarly.flatMap((t) =>
+      t.events.map((e) => e.google_event_id),
+    );
+    await calendarService.removeEvents({
+      client: calClient,
+      events: eventIds,
+    });
+    await prisma.taskEvent.updateMany({
+      where: {
+        task_id: { in: completedEarly.map((t) => t.id) },
+        is_active: true,
+      },
+      data: { is_active: false },
+    });
+  } catch (err) {
+    logger.warn(
+      'Failed to clean up calendar event(s) for early-completed task(s)',
+      err instanceof Error ? err.stack : String(err),
+    );
+  }
+};
+
+// Step 9. Record one marker event per status for leaves changed ahead of
+// their scheduled event (DONE / IN_PROGRESS / HOLD) — e.g. "[DONE] Early
+// task" listing every task completed early in this submission. Best-effort.
+export const applyEarlyMarkers = async (
+  userId: string,
+  planId: string,
+  earlyLeaves: LeafTask[],
+  userState: UserState,
+  { calendarService, logger }: Pick<StepDeps, 'calendarService' | 'logger'>,
+): Promise<void> => {
+  if (earlyLeaves.length === 0) return;
+  try {
+    await createEarlyMarkerEvents({
       userId,
       planId,
-      tasks: completedEarly,
+      tasks: earlyLeaves,
       userState,
       calendarService,
     });
   } catch (err) {
     logger.error(
-      'Failed to create done-marker calendar events',
+      'Failed to create early-marker calendar events',
       err instanceof Error ? err.stack : String(err),
     );
   }
@@ -503,10 +541,12 @@ const insertCalendarEvent = async ({
   return createdEvent.id;
 };
 
-// Records work finished ahead of schedule as a marker event, stacked after
-// working hours on the day it was actually completed. The originally
-// scheduled event for the task is left untouched.
-const createDoneMarkerEvents = async ({
+// Records leaves changed ahead of their scheduled event as one marker event
+// per status, stacked after working hours on the day the change happened.
+// The tasks' own original events are handled elsewhere (cleanupHeldLeaves
+// for HOLD, applyRuleReschedule for IN_PROGRESS, cleanupCompletedEarly for
+// DONE) — this only ever adds the marker.
+const createEarlyMarkerEvents = async ({
   userId,
   planId,
   tasks,
@@ -515,15 +555,12 @@ const createDoneMarkerEvents = async ({
 }: {
   userId: string;
   planId: string;
-  tasks: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    estimated_minutes: number | null;
-  }>;
+  tasks: IEarlyMarkerTask[];
   userState: UserState;
   calendarService: CalendarService;
 }) => {
+  const groups = buildEarlyMarkerGroups(tasks);
+
   const [endHour, endMinute] = userState.working_hours_end
     .split(':')
     .map(Number);
@@ -534,10 +571,9 @@ const createDoneMarkerEvents = async ({
     .second(0)
     .millisecond(0);
 
-  for (const task of tasks) {
-    const durationMinutes = task.estimated_minutes ?? 30;
+  for (const group of groups) {
     const start = cursor;
-    const end = cursor.add(durationMinutes, 'minute');
+    const end = cursor.add(group.totalMinutes, 'minute');
 
     await withRetry(() =>
       limit(() =>
@@ -547,8 +583,8 @@ const createDoneMarkerEvents = async ({
             params: {
               calendarId: 'primary',
               requestBody: {
-                summary: task.title,
-                description: task.description ?? undefined,
+                summary: group.summary,
+                description: group.description,
                 start: {
                   dateTime: start.format(),
                   timeZone: userState.time_zone,
@@ -557,8 +593,8 @@ const createDoneMarkerEvents = async ({
                 extendedProperties: {
                   private: {
                     plan_id: planId,
-                    task_id: task.id,
-                    done_marker: 'true',
+                    early_marker: 'true',
+                    status: group.status,
                   },
                 },
               },

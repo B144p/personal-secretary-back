@@ -49,6 +49,9 @@ export const allNonHeldLeavesDone = <
 // - completedEarly: just marked DONE, event hasn't ended yet (finished ahead)
 // - completedLate: just marked DONE, event already ended (finished, but late)
 // - remainingLeaves: everything still needing a calendar slot (not DONE/HOLD)
+// - earlyLeaves: just changed to DONE/IN_PROGRESS/HOLD, event hasn't ended
+//   yet — the superset of "ahead of schedule" changes that get an
+//   "[STATUS] Early task" marker event (completedEarly is its DONE subset)
 export const classifyLeaves = <T extends StatusClassifiable>({
   allTasks,
   leafIds,
@@ -64,6 +67,7 @@ export const classifyLeaves = <T extends StatusClassifiable>({
   completedEarly: T[];
   completedLate: T[];
   remainingLeaves: T[];
+  earlyLeaves: T[];
 } => {
   const slippedLeaves = allTasks.filter((t) => {
     if (!leafIds.has(t.id)) return false;
@@ -99,7 +103,31 @@ export const classifyLeaves = <T extends StatusClassifiable>({
     (t) => leafIds.has(t.id) && isSchedulableLeaf(t.status),
   );
 
-  return { slippedLeaves, completedEarly, completedLate, remainingLeaves };
+  const earlyStatuses = new Set<string>([
+    ETaskStatus.DONE,
+    ETaskStatus.IN_PROGRESS,
+    ETaskStatus.HOLD,
+  ]);
+  const changedStatusByTaskId = new Map(
+    statusChanges
+      .filter((sc) => earlyStatuses.has(sc.newStatus))
+      .map((sc) => [sc.taskId, sc.newStatus]),
+  );
+  const earlyLeaves = allTasks.filter((t) => {
+    if (!leafIds.has(t.id)) return false;
+    if (!changedStatusByTaskId.has(t.id)) return false;
+    const activeEvent = t.events[0];
+    if (!activeEvent) return false;
+    return dayjs(activeEvent.end).isAfter(now);
+  });
+
+  return {
+    slippedLeaves,
+    completedEarly,
+    completedLate,
+    remainingLeaves,
+    earlyLeaves,
+  };
 };
 
 // Derives a parent's status from its children's (already-resolved) statuses:
