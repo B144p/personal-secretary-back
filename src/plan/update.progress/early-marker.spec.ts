@@ -6,7 +6,6 @@ const task = (
 ): IEarlyMarkerTask => ({
   title: `Task ${overrides.id}`,
   status: ETaskStatus.DONE,
-  estimated_minutes: 30,
   ...overrides,
 });
 
@@ -39,14 +38,6 @@ describe('buildEarlyMarkerGroups', () => {
       [ETaskStatus.DONE, ETaskStatus.HOLD, ETaskStatus.IN_PROGRESS].sort(),
     );
     expect(groups.every((g) => g.taskIds.length === 1)).toBe(true);
-  });
-
-  it('sums estimated_minutes across the group, defaulting missing values to 30', () => {
-    const groups = buildEarlyMarkerGroups([
-      task({ id: 't1', status: ETaskStatus.DONE, estimated_minutes: 45 }),
-      task({ id: 't2', status: ETaskStatus.DONE, estimated_minutes: null }),
-    ]);
-    expect(groups[0].totalMinutes).toBe(75);
   });
 
   it('returns an empty array for no tasks', () => {

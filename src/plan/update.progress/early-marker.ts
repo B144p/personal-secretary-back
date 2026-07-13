@@ -4,7 +4,6 @@ export interface IEarlyMarkerTask {
   id: string;
   title: string;
   status: ETaskStatus;
-  estimated_minutes: number | null;
 }
 
 export interface IEarlyMarkerGroup {
@@ -12,7 +11,6 @@ export interface IEarlyMarkerGroup {
   summary: string;
   description: string;
   taskIds: string[];
-  totalMinutes: number;
 }
 
 // Pure grouping: one marker group per status among the given early leaves,
@@ -32,9 +30,5 @@ export const buildEarlyMarkerGroups = (
     summary: `[${status}] Early task`,
     description: groupTasks.map((t) => `- ${t.title}`).join('\n'),
     taskIds: groupTasks.map((t) => t.id),
-    totalMinutes: groupTasks.reduce(
-      (sum, t) => sum + (t.estimated_minutes ?? 30),
-      0,
-    ),
   }));
 };

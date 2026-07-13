@@ -400,7 +400,8 @@ export const applyEarlyMarkers = async (
   planId: string,
   earlyLeaves: LeafTask[],
   userState: UserState,
-  { calendarService, logger }: Pick<StepDeps, 'calendarService' | 'logger'>,
+  feedbackDay: dayjs.Dayjs,
+  { prisma, calendarService, logger }: StepDeps,
 ): Promise<void> => {
   if (earlyLeaves.length === 0) return;
   try {
@@ -409,6 +410,8 @@ export const applyEarlyMarkers = async (
       planId,
       tasks: earlyLeaves,
       userState,
+      feedbackDay,
+      prisma,
       calendarService,
     });
   } catch (err) {
@@ -546,17 +549,23 @@ const insertCalendarEvent = async ({
 // The tasks' own original events are handled elsewhere (cleanupHeldLeaves
 // for HOLD, applyRuleReschedule for IN_PROGRESS, cleanupCompletedEarly for
 // DONE) — this only ever adds the marker.
+const EARLY_MARKER_MINUTES = 15;
+
 const createEarlyMarkerEvents = async ({
   userId,
   planId,
   tasks,
   userState,
+  feedbackDay,
+  prisma,
   calendarService,
 }: {
   userId: string;
   planId: string;
   tasks: IEarlyMarkerTask[];
   userState: UserState;
+  feedbackDay: dayjs.Dayjs;
+  prisma: PrismaService;
   calendarService: CalendarService;
 }) => {
   const groups = buildEarlyMarkerGroups(tasks);
@@ -564,8 +573,7 @@ const createEarlyMarkerEvents = async ({
   const [endHour, endMinute] = userState.working_hours_end
     .split(':')
     .map(Number);
-  let cursor = dayjs()
-    .tz(userState.time_zone)
+  let cursor = feedbackDay
     .hour(endHour)
     .minute(endMinute)
     .second(0)
@@ -573,11 +581,11 @@ const createEarlyMarkerEvents = async ({
 
   for (const group of groups) {
     const start = cursor;
-    const end = cursor.add(group.totalMinutes, 'minute');
+    const end = cursor.add(EARLY_MARKER_MINUTES, 'minute');
 
-    await withRetry(() =>
-      limit(() =>
-        calendarService.insertEvent({
+    const markerEventId = await withRetry(() =>
+      limit(async () => {
+        const created = await calendarService.insertEvent({
           userId,
           request: {
             params: {
@@ -600,9 +608,22 @@ const createEarlyMarkerEvents = async ({
               },
             },
           },
-        }),
-      ),
+        });
+        if (!created.id)
+          throw new Error('Google Calendar did not return event id');
+        return created.id;
+      }),
     );
+
+    await prisma.taskEvent.createMany({
+      data: group.taskIds.map((taskId) => ({
+        task_id: taskId,
+        google_event_id: markerEventId,
+        start: start.toDate(),
+        end: end.toDate(),
+        is_active: false,
+      })),
+    });
 
     cursor = end;
   }

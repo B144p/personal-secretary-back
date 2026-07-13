@@ -13,6 +13,7 @@ import {
   classifyLeaves,
   findHeldLeavesWithFutureEvents,
 } from './classify';
+import { resolveFeedbackDay } from './feedback-day';
 import {
   applyEarlyMarkers,
   applyParentStatusRollup,
@@ -112,17 +113,20 @@ export class UpdateProgressService {
     const allTasks = updatedPlan.tasks;
     const leafIds = getLeafIds(allTasks);
     const now = dayjs();
+    // The working day this feedback pertains to — today, or yesterday when
+    // submitted before today's working hours begin (e.g. an after-midnight
+    // review). Anchors the "[<STATUS>] Early task" marker events below.
+    const feedbackDay = resolveFeedbackDay(userState, now);
 
-    // 4a. Held leaves are deprioritized: drop their future calendar event (if
-    // any) and exclude them from scheduling below. Past events are left
-    // untouched as a historical record. Best-effort — must run even if this
-    // request has no other reschedule-worthy change.
+    // 4a. Held leaves are deprioritized: their future calendar event (if
+    // any) gets dropped and they're excluded from scheduling below. Past
+    // events are left untouched as a historical record. The drop itself
+    // happens later (step 9), after early markers are recorded.
     const heldLeavesWithFutureEvents = findHeldLeavesWithFutureEvents(
       allTasks,
       leafIds,
       now,
     );
-    await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
 
     // 4b. Re-derive each parent's status (DONE / IN_PROGRESS / HOLD /
     // PENDING) from its children, cascading up multiple levels. Best-effort.
@@ -133,6 +137,7 @@ export class UpdateProgressService {
     // are skipped for completion purposes; an all-held plan stays stalled
     // rather than auto-completing.
     if (allNonHeldLeavesDone(allTasks, leafIds)) {
+      await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
       await this.prisma.plan.update({
         where: { id: plan.id },
         data: { status: EPlanStatus.DONE },
@@ -173,7 +178,28 @@ export class UpdateProgressService {
       };
     }
 
-    // 7-8. Re-schedule slipped + remaining unscheduled leaves. Triggering
+    // 8. Record one marker event per status for leaves changed ahead of
+    // schedule (e.g. "[DONE] Early task" listing the tasks), plus a
+    // task_event row per early task pointing at its marker. Runs before the
+    // cleanup/reschedule steps below so every early task's marker row exists
+    // before its original event is deleted (DONE/HOLD) or replaced
+    // (IN_PROGRESS). Best-effort.
+    await applyEarlyMarkers(
+      userId,
+      plan.id,
+      earlyLeaves,
+      userState,
+      feedbackDay,
+      deps,
+    );
+
+    // 9. Held leaves are deprioritized: drop their future calendar event (if
+    // any) now that its marker row (if early) has been recorded above. Past
+    // events are left untouched as a historical record. Best-effort — must
+    // run even if this request has no other reschedule-worthy change.
+    await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
+
+    // 10. Re-schedule slipped + remaining unscheduled leaves. Triggering
     // this on early completion (not just overdue) lets the scheduler —
     // which already packs tasks ASAP — pull the remaining plan forward.
     const { rescheduledCount, unscheduledTaskIds, rescheduleFailed } =
@@ -189,15 +215,11 @@ export class UpdateProgressService {
         deps,
       );
 
-    // 9a. Early-completed (DONE) tasks have no other flow that removes their
+    // 11. Early-completed (DONE) tasks have no other flow that removes their
     // now-stale original event — HOLD-early is handled by cleanupHeldLeaves
     // above, IN_PROGRESS-early is re-slotted by applyRuleReschedule above.
     // Best-effort like the other cleanup steps.
     await cleanupCompletedEarly(userId, completedEarly, deps);
-
-    // 9b. Record one marker event per status for leaves changed ahead of
-    // schedule (e.g. "[DONE] Early task" listing the tasks). Best-effort.
-    await applyEarlyMarkers(userId, plan.id, earlyLeaves, userState, deps);
 
     return {
       rescheduled: rescheduledCount,
