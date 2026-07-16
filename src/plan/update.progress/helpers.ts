@@ -6,7 +6,6 @@ import utc from 'dayjs/plugin/utc';
 import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { withRetry } from 'src/utils';
 import { orderLeavesByTree } from '../leaf-select';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
@@ -258,22 +257,20 @@ export const applyRuleReschedule = async (
         if (isPendingWithEvent) {
           try {
             // PENDING task: no work history to preserve — shift the existing event in place.
-            await withRetry(async () => {
-              await calendarService.patchEvent({
-                userId,
-                eventId: meta.activeEvent!.google_event_id,
-                requestBody: {
-                  summary: item.title ?? '',
-                  start: {
-                    dateTime: item.start,
-                    timeZone: userState.time_zone,
-                  },
-                  end: {
-                    dateTime: item.end,
-                    timeZone: userState.time_zone,
-                  },
+            await calendarService.patchEvent({
+              userId,
+              eventId: meta.activeEvent!.google_event_id,
+              requestBody: {
+                summary: item.title ?? '',
+                start: {
+                  dateTime: item.start,
+                  timeZone: userState.time_zone,
                 },
-              });
+                end: {
+                  dateTime: item.end,
+                  timeZone: userState.time_zone,
+                },
+              },
             });
             await prisma.$transaction(
               buildActiveTaskEventWrite(prisma, {
@@ -298,16 +295,14 @@ export const applyRuleReschedule = async (
           // IN_PROGRESS (or no existing event, or PENDING fallback after failed patch):
           // insert a new Google event and deactivate the old task_event.
           // IN_PROGRESS slipped tasks keep their old calendar event as a work-history record.
-          const googleEventId = await withRetry(() =>
-            limit(() =>
-              insertCalendarEvent({
-                userId,
-                planId,
-                client: calendarService,
-                timeZone: userState.time_zone,
-                event: item,
-              }),
-            ),
+          const googleEventId = await limit(() =>
+            insertCalendarEvent({
+              userId,
+              planId,
+              client: calendarService,
+              timeZone: userState.time_zone,
+              event: item,
+            }),
           );
 
           await prisma.$transaction(
@@ -583,37 +578,35 @@ const createEarlyMarkerEvents = async ({
     const start = cursor;
     const end = cursor.add(EARLY_MARKER_MINUTES, 'minute');
 
-    const markerEventId = await withRetry(() =>
-      limit(async () => {
-        const created = await calendarService.insertEvent({
-          userId,
-          request: {
-            params: {
-              calendarId: 'primary',
-              requestBody: {
-                summary: group.summary,
-                description: group.description,
-                start: {
-                  dateTime: start.format(),
-                  timeZone: userState.time_zone,
-                },
-                end: { dateTime: end.format(), timeZone: userState.time_zone },
-                extendedProperties: {
-                  private: {
-                    plan_id: planId,
-                    early_marker: 'true',
-                    status: group.status,
-                  },
+    const markerEventId = await limit(async () => {
+      const created = await calendarService.insertEvent({
+        userId,
+        request: {
+          params: {
+            calendarId: 'primary',
+            requestBody: {
+              summary: group.summary,
+              description: group.description,
+              start: {
+                dateTime: start.format(),
+                timeZone: userState.time_zone,
+              },
+              end: { dateTime: end.format(), timeZone: userState.time_zone },
+              extendedProperties: {
+                private: {
+                  plan_id: planId,
+                  early_marker: 'true',
+                  status: group.status,
                 },
               },
             },
           },
-        });
-        if (!created.id)
-          throw new Error('Google Calendar did not return event id');
-        return created.id;
-      }),
-    );
+        },
+      });
+      if (!created.id)
+        throw new Error('Google Calendar did not return event id');
+      return created.id;
+    });
 
     await prisma.taskEvent.createMany({
       data: group.taskIds.map((taskId) => ({

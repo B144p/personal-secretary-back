@@ -1,11 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { Injectable, Logger } from '@nestjs/common';
 import { EEventCategory } from '@prisma/client';
 import dayjs from 'dayjs';
 import pLimit from 'p-limit';
+import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { CryptoService } from 'src/crypto/crypto.service';
 import { OpenAIService } from 'src/openai/openai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
+import { getGoogleReason, getHttpStatus, withGoogleRetry } from 'src/utils';
 import { getCalendarClient } from './calendar.client';
 import {
   IGetCalendarRangeProps,
@@ -19,6 +22,8 @@ const limit = pLimit(2);
 
 @Injectable()
 export class CalendarService {
+  private readonly logger = new Logger(CalendarService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly userService: UserService,
@@ -32,18 +37,76 @@ export class CalendarService {
     return getCalendarClient(plainToken);
   }
 
-  async insertEvent({ userId, request }: IInsertEvent) {
+  // Single boundary between this service and the Google API: retries
+  // transient failures, then maps whatever survives into an AppException.
+  // Do NOT also enable gaxios retryConfig — two retry layers multiply
+  // attempts (5 x default 4 = 20) and can blow the client's 120s timeout.
+  private async googleCall<T>(
+    operation: string,
+    fn: () => Promise<T>,
+    retryOptions?: { deadlineAt?: number },
+  ): Promise<T> {
+    try {
+      return await withGoogleRetry(fn, retryOptions);
+    } catch (err) {
+      if (err instanceof AppException) throw err;
+      const status = getHttpStatus(err);
+      const reason = getGoogleReason(err);
+      this.logger.error(
+        `Google Calendar ${operation} failed (status=${status ?? 'n/a'}, reason=${reason ?? 'n/a'})`,
+        err instanceof Error ? err.stack : String(err),
+      );
+      if (status === 401 || reason === 'invalid_grant') {
+        throw new AppException(
+          AppErrorCode.GOOGLE_REAUTH_REQUIRED,
+          'Google access expired',
+        );
+      }
+      throw new AppException(
+        AppErrorCode.GOOGLE_CALENDAR_ERROR,
+        'Google Calendar request failed',
+        { operation, reason },
+      );
+    }
+  }
+
+  async insertEvent({ userId, request, deadlineAt }: IInsertEvent) {
     const client = await this.getClient(userId);
     const { params, options } = request;
-    const createdEvent = await client.events.insert(
-      {
-        ...params,
-        calendarId: params.calendarId ?? 'primary',
-      },
-      options,
-    );
+    const calendarId = params.calendarId ?? 'primary';
 
-    return createdEvent.data;
+    // Client-generated id makes the insert idempotent across retries: every
+    // attempt for this call targets the same id, so a retry of an attempt
+    // that actually succeeded (response lost to a timeout/network drop) comes
+    // back 409 duplicate instead of creating a second event. Generated once,
+    // outside the retry loop — NOT derived from task/plan id, because pause
+    // deletes events and Google reserves a deleted event's id forever; a
+    // derived id would then 409 forever on resume.
+    const eventId = params.requestBody?.id ?? randomUUID().replace(/-/g, '');
+    const requestBody = { ...params.requestBody, id: eventId };
+
+    return this.googleCall(
+      'events.insert',
+      async () => {
+        try {
+          const created = await client.events.insert(
+            { ...params, calendarId, requestBody },
+            options,
+          );
+          return created.data;
+        } catch (err) {
+          if (getHttpStatus(err) !== 409) throw err;
+          // Our own retry landed here after the first attempt actually
+          // succeeded. Resolve to that event instead of erroring.
+          const existing = await client.events.get({ calendarId, eventId });
+          // A cancelled event means this id was reserved by an unrelated
+          // deleted event, not something we created — surface the 409.
+          if (existing.data.status === 'cancelled') throw err;
+          return existing.data;
+        }
+      },
+      { deadlineAt },
+    );
   }
 
   classifyRules(userId: string) {
@@ -132,10 +195,12 @@ export class CalendarService {
       ? dayjs(user.user_state.last_calendar_sync).toISOString()
       : undefined; // If never sync before, get all calendar events
 
-    const calendarList = await client.events.list({
-      calendarId: 'primary',
-      updatedMin,
-    });
+    const calendarList = await this.googleCall('events.list', () =>
+      client.events.list({
+        calendarId: 'primary',
+        updatedMin,
+      }),
+    );
 
     await this.prisma.userState.upsert({
       where: { user_id: user.id },
@@ -167,10 +232,12 @@ export class CalendarService {
     const token = await this.userService.getRefreshToken(userId);
     const calendarClient = getCalendarClient(this.crypto.decrypt(token));
 
-    const calendarList = await calendarClient.events.list({
-      calendarId,
-      ...range,
-    });
+    const calendarList = await this.googleCall('events.list', () =>
+      calendarClient.events.list({
+        calendarId,
+        ...range,
+      }),
+    );
 
     const dataFormat =
       calendarList.data.items?.map(({ extendedProperties, ...rest }) => {
@@ -198,11 +265,13 @@ export class CalendarService {
     requestBody,
   }: IPatchEvent): Promise<void> {
     const calClient = await this.getClient(userId);
-    await calClient.events.patch({
-      calendarId: 'primary',
-      eventId,
-      requestBody,
-    });
+    await this.googleCall('events.patch', () =>
+      calClient.events.patch({
+        calendarId: 'primary',
+        eventId,
+        requestBody,
+      }),
+    );
   }
 
   async removeEvents({
@@ -210,11 +279,31 @@ export class CalendarService {
     calendarId = 'primary',
     events,
   }: IRemoveEvents) {
-    await Promise.all(
+    const results = await Promise.allSettled(
       events.map((eventId) =>
-        limit(() => client.events.delete({ calendarId, eventId })),
-      ) ?? [],
+        limit(() =>
+          this.googleCall('events.delete', async () => {
+            try {
+              await client.events.delete({ calendarId, eventId });
+            } catch (err) {
+              const status = getHttpStatus(err);
+              // Already gone is the goal state for a delete — treat as success
+              // so a rollback/cleanup call isn't tripped up by a prior partial
+              // delete or a manually-removed event.
+              if (status === 404 || status === 410) return;
+              throw err;
+            }
+          }),
+        ),
+      ),
     );
+
+    const failures = results.filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (failures.length > 0) {
+      throw failures[0].reason;
+    }
 
     return 'Remove events success.';
   }
