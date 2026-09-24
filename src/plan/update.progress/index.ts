@@ -36,6 +36,10 @@ dayjs.extend(timezone);
 export class UpdateProgressService {
   private readonly logger = new Logger(UpdateProgressService.name);
 
+  // TODO: replace with a job queue (e.g. BullMQ) so the lock survives restarts
+  // and works correctly across multiple backend instances.
+  private readonly progressLocks = new Set<string>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly calendarService: CalendarService,
@@ -46,7 +50,26 @@ export class UpdateProgressService {
     return this.calendarScheduleService.getCurrentSchedule({ userId });
   }
 
-  async updateProgress({ userId, data }: IUpdateProgressProps) {
+  async updateProgress(props: IUpdateProgressProps) {
+    // Guard against a second concurrent call (e.g. double-click, retry) for
+    // the same user — each call can create real Google Calendar events
+    // before persisting, so a race here would leave one attempt's events
+    // orphaned with no DB record, or duplicated outright.
+    if (this.progressLocks.has(props.userId)) {
+      throw new AppException(
+        AppErrorCode.PROGRESS_UPDATE_IN_PROGRESS,
+        'A progress update is already in flight for this plan',
+      );
+    }
+    this.progressLocks.add(props.userId);
+    try {
+      return await this.doUpdateProgress(props);
+    } finally {
+      this.progressLocks.delete(props.userId);
+    }
+  }
+
+  private async doUpdateProgress({ userId, data }: IUpdateProgressProps) {
     const { statusChanges = [], contextText } = data;
     const deps = {
       prisma: this.prisma,
@@ -133,21 +156,12 @@ export class UpdateProgressService {
     const changedTaskIds = new Set(statusChanges.map((sc) => sc.taskId));
     await applyParentStatusRollup(plan.id, allTasks, changedTaskIds, deps);
 
-    // 5. Check if all non-held leaves are DONE → mark plan DONE. Held leaves
-    // are skipped for completion purposes; an all-held plan stays stalled
-    // rather than auto-completing.
-    if (allNonHeldLeavesDone(allTasks, leafIds)) {
-      await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
-      await this.prisma.plan.update({
-        where: { id: plan.id },
-        data: { status: EPlanStatus.DONE },
-      });
-      return {
-        rescheduled: 0,
-        planStatus: EPlanStatus.DONE,
-        unscheduledTaskIds: [],
-      };
-    }
+    // 5. Whether this update completes the plan: all non-held leaves DONE.
+    // Held leaves are skipped for completion purposes; an all-held plan
+    // stays stalled rather than auto-completing. Checked now but acted on
+    // after classification/markers below, so a completing update still gets
+    // its early-marker and stale-event cleanup instead of skipping them.
+    const isCompleting = allNonHeldLeavesDone(allTasks, leafIds);
 
     // 6. Classify what changed: slipped / completed-early / completed-late /
     // early (DONE, IN_PROGRESS or HOLD ahead of schedule) leaves, plus the
@@ -165,6 +179,7 @@ export class UpdateProgressService {
     // statuses), so earlyLeaves.length === 0 already implies it. Safe to
     // drop; kept for now to avoid touching this gate mid-branch.
     if (
+      !isCompleting &&
       slippedLeaves.length === 0 &&
       completedEarly.length === 0 &&
       completedLate.length === 0 &&
@@ -198,6 +213,22 @@ export class UpdateProgressService {
     // events are left untouched as a historical record. Best-effort — must
     // run even if this request has no other reschedule-worthy change.
     await cleanupHeldLeaves(userId, heldLeavesWithFutureEvents, deps);
+
+    if (isCompleting) {
+      // Early-completed (DONE) tasks have no other flow that removes their
+      // now-stale original event — HOLD-early was just handled by
+      // cleanupHeldLeaves above. Best-effort like the other cleanup steps.
+      await cleanupCompletedEarly(userId, completedEarly, deps);
+      await this.prisma.plan.update({
+        where: { id: plan.id },
+        data: { status: EPlanStatus.DONE },
+      });
+      return {
+        rescheduled: 0,
+        planStatus: EPlanStatus.DONE,
+        unscheduledTaskIds: [],
+      };
+    }
 
     // 10. Re-schedule slipped + remaining unscheduled leaves. Triggering
     // this on early completion (not just overdue) lets the scheduler —

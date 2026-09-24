@@ -83,32 +83,9 @@ export const persistDailyFeedback = async (
 export const cleanupHeldLeaves = async (
   userId: string,
   heldLeaves: LeafTask[],
-  { prisma, calendarService, logger }: StepDeps,
-): Promise<void> => {
-  if (heldLeaves.length === 0) return;
-  try {
-    const calClient = await calendarService.getClient(userId);
-    const eventIds = heldLeaves.flatMap((t) =>
-      t.events.map((e) => e.google_event_id),
-    );
-    await calendarService.removeEvents({
-      client: calClient,
-      events: eventIds,
-    });
-    await prisma.taskEvent.updateMany({
-      where: {
-        task_id: { in: heldLeaves.map((t) => t.id) },
-        is_active: true,
-      },
-      data: { is_active: false },
-    });
-  } catch (err) {
-    logger.warn(
-      'Failed to clean up calendar event(s) for held task(s)',
-      err instanceof Error ? err.stack : String(err),
-    );
-  }
-};
+  deps: StepDeps,
+): Promise<void> =>
+  cleanupLeavesCalendarEvents(userId, heldLeaves, 'held', deps);
 
 // Step 4b. Re-derive every parent's status (DONE / IN_PROGRESS / HOLD /
 // PENDING) from its children, cascading up multiple levels — a parent's
@@ -360,28 +337,59 @@ export const applyRuleReschedule = async (
 export const cleanupCompletedEarly = async (
   userId: string,
   completedEarly: LeafTask[],
+  deps: StepDeps,
+): Promise<void> =>
+  cleanupLeavesCalendarEvents(userId, completedEarly, 'early-completed', deps);
+
+// Shared by cleanupHeldLeaves/cleanupCompletedEarly: deletes each task's
+// calendar event(s) independently (one task's failure must not block
+// another's) and only deactivates the TaskEvent rows for tasks whose delete
+// actually succeeded — deactivating on a failed delete would leave the DB
+// saying "inactive" for an event that's still really on the calendar, the
+// inverse of the orphan state the schedule sweep looks for. Best-effort —
+// must not turn already-committed status changes into a 500.
+const cleanupLeavesCalendarEvents = async (
+  userId: string,
+  leaves: LeafTask[],
+  label: string,
   { prisma, calendarService, logger }: StepDeps,
 ): Promise<void> => {
-  if (completedEarly.length === 0) return;
+  if (leaves.length === 0) return;
   try {
     const calClient = await calendarService.getClient(userId);
-    const eventIds = completedEarly.flatMap((t) =>
-      t.events.map((e) => e.google_event_id),
+    const succeededTaskIds: string[] = [];
+    await Promise.all(
+      leaves.map(async (task) => {
+        const eventIds = task.events.map((e) => e.google_event_id);
+        if (eventIds.length === 0) {
+          succeededTaskIds.push(task.id);
+          return;
+        }
+        try {
+          await calendarService.removeEvents({
+            client: calClient,
+            events: eventIds,
+          });
+          succeededTaskIds.push(task.id);
+        } catch (err) {
+          logger.warn(
+            `Failed to clean up calendar event(s) for ${label} task ${task.id}`,
+            err instanceof Error ? err.stack : String(err),
+          );
+        }
+      }),
     );
-    await calendarService.removeEvents({
-      client: calClient,
-      events: eventIds,
-    });
+    if (succeededTaskIds.length === 0) return;
     await prisma.taskEvent.updateMany({
       where: {
-        task_id: { in: completedEarly.map((t) => t.id) },
+        task_id: { in: succeededTaskIds },
         is_active: true,
       },
       data: { is_active: false },
     });
   } catch (err) {
     logger.warn(
-      'Failed to clean up calendar event(s) for early-completed task(s)',
+      `Failed to clean up calendar event(s) for ${label} task(s)`,
       err instanceof Error ? err.stack : String(err),
     );
   }
