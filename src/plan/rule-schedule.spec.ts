@@ -18,6 +18,19 @@ const baseUserState: UserState = {
 } as UserState;
 
 describe('computeRuleSchedule', () => {
+  // computeRuleSchedule anchors to the real wall clock (getEarliestScheduleTime
+  // calls dayjs() internally), so these assertions depend on what time it is
+  // when the suite runs unless frozen. 08:00 Monday Asia/Bangkok is before
+  // working hours (10:00) and never a day off, so every placement below starts
+  // predictably at today's working-hours start.
+  beforeAll(() => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-06T08:00:00+07:00'));
+  });
+
+  afterAll(() => {
+    jest.useRealTimers();
+  });
+
   it('packs tasks in the given order with exact durations and a 15-minute break between them', () => {
     const { placements, unschedulableTaskIds } = computeRuleSchedule({
       tasks: [

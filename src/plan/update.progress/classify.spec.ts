@@ -176,6 +176,69 @@ describe('classifyLeaves', () => {
     expect(result.remainingLeaves).toEqual([pending]);
   });
 
+  it.each([ETaskStatus.DONE, ETaskStatus.IN_PROGRESS, ETaskStatus.HOLD])(
+    'buckets a leaf changed to %s this request as early when its event is still in the future',
+    (status) => {
+      const t = task({ id: 't1', status, events: [{ end: future }] });
+      const leafIds = getLeafIds([t]);
+      const result = classifyLeaves({
+        allTasks: [t],
+        leafIds,
+        statusChanges: [{ taskId: 't1', newStatus: status }],
+        now,
+      });
+      expect(result.earlyLeaves).toEqual([t]);
+    },
+  );
+
+  it('excludes a leaf from earlyLeaves when its event has already ended', () => {
+    const t = task({
+      id: 't1',
+      status: ETaskStatus.DONE,
+      events: [{ end: past }],
+    });
+    const leafIds = getLeafIds([t]);
+    const result = classifyLeaves({
+      allTasks: [t],
+      leafIds,
+      statusChanges: [{ taskId: 't1', newStatus: 'DONE' }],
+      now,
+    });
+    expect(result.earlyLeaves).toEqual([]);
+  });
+
+  it('excludes a leaf from earlyLeaves when changed to PENDING', () => {
+    const t = task({
+      id: 't1',
+      status: ETaskStatus.PENDING,
+      events: [{ end: future }],
+    });
+    const leafIds = getLeafIds([t]);
+    const result = classifyLeaves({
+      allTasks: [t],
+      leafIds,
+      statusChanges: [{ taskId: 't1', newStatus: 'PENDING' }],
+      now,
+    });
+    expect(result.earlyLeaves).toEqual([]);
+  });
+
+  it('excludes a leaf from earlyLeaves when it was not changed this request', () => {
+    const t = task({
+      id: 't1',
+      status: ETaskStatus.DONE,
+      events: [{ end: future }],
+    });
+    const leafIds = getLeafIds([t]);
+    const result = classifyLeaves({
+      allTasks: [t],
+      leafIds,
+      statusChanges: [],
+      now,
+    });
+    expect(result.earlyLeaves).toEqual([]);
+  });
+
   it('ignores non-leaf (parent) tasks entirely', () => {
     const parent = task({
       id: 'parent',

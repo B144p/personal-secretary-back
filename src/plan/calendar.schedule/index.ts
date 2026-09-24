@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EPlanStatus } from '@prisma/client';
 import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone';
@@ -7,7 +7,6 @@ import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { withRetry } from 'src/utils';
 import { ITaskScheduleProps } from '../interfaces';
 import { selectSchedulableLeavesInOrder } from '../leaf-select';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
@@ -16,10 +15,21 @@ import { buildActiveTaskEventWrite } from '../task-event.write';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const limit = pLimit(8);
+// Matches CalendarService's own write concurrency (calendar.service.ts,
+// update.progress/helpers.ts) — Calendar effectively serializes writes per
+// calendar, so higher fan-out buys little and trips per-user rate limits
+// sooner (this is what caused the orphaned/duplicated-events bug).
+const limit = pLimit(2);
+
+// Shared across an entire batch of inserts so retries stay inside the
+// frontend's CALENDAR_SCHEDULE_TIMEOUT_MS (120s) instead of each insert
+// independently spending its own full retry budget.
+const SCHEDULE_DEADLINE_MS = 60_000;
 
 @Injectable()
 export class CalendarScheduleService {
+  private readonly logger = new Logger(CalendarScheduleService.name);
+
   // TODO: replace with a job queue (e.g. BullMQ) so the lock survives restarts
   // and works correctly across multiple backend instances.
   private readonly schedulingLocks = new Set<string>();
@@ -76,6 +86,14 @@ export class CalendarScheduleService {
     });
     if (!userState) throw new Error('UserState not found');
 
+    // Self-healing: remove any calendar event tagged with this plan that has
+    // no task_event row at all — leftovers from a prior attempt that failed
+    // after inserting but before persisting (e.g. a rate-limit error on a
+    // sibling insert). Without this, re-clicking Schedule piles a fresh set
+    // of events on top instead of replacing the stranded ones. Best-effort:
+    // a sweep failure must not block scheduling.
+    await this.sweepOrphanedEvents(userId, id);
+
     const range = {
       timeMin: dayjs().toISOString(),
       timeMax: dayjs().add(1, 'month').toISOString(),
@@ -113,6 +131,7 @@ export class CalendarScheduleService {
       client: this.calendarService,
       timeZone: userState.time_zone,
       schedule,
+      logger: this.logger,
     });
 
     // Reuse each task's most recent inactive TaskEvent row (left behind by a prior
@@ -152,11 +171,12 @@ export class CalendarScheduleService {
     } catch (err) {
       // The Calendar events above were already created via the Google API —
       // if persisting fails, remove them so they don't leak with no DB record.
-      const calClient = await this.calendarService.getClient(userId);
-      await this.calendarService.removeEvents({
-        client: calClient,
-        calendarId: 'primary',
-        events: taskEvents.map((e) => e.googleEventId),
+      await rollbackEvents({
+        calendarService: this.calendarService,
+        userId,
+        eventIds: taskEvents.map((e) => e.googleEventId),
+        logger: this.logger,
+        context: { planId: id, phase: 'persist' },
       });
       throw err;
     }
@@ -168,6 +188,55 @@ export class CalendarScheduleService {
       .map((t) => t.id);
 
     return { scheduledTaskIds, unscheduledTaskIds };
+  }
+
+  // An "orphan" is a Google Calendar event tagged with this plan's id that has
+  // no matching task_event row — the signature left by an interrupted prior
+  // scheduling attempt (see rollbackEvents / applySchedule). Compares against
+  // ALL task_event rows regardless of is_active: some inactive rows are kept
+  // deliberately as work-history records (see update.progress/helpers.ts) and
+  // must survive the sweep; only events with no row at all are removed.
+  private async sweepOrphanedEvents(userId: string, planId: string) {
+    try {
+      const client = await this.calendarService.getClient(userId);
+      const { data } = await client.events.list({
+        calendarId: 'primary',
+        privateExtendedProperty: [`plan_id=${planId}`],
+      });
+
+      const knownEventIds = new Set(
+        (
+          await this.prisma.taskEvent.findMany({
+            where: { task: { plan_id: planId } },
+            select: { google_event_id: true },
+          })
+        ).map((e) => e.google_event_id),
+      );
+
+      const orphanIds = (data.items ?? [])
+        .map((e) => e.id)
+        .filter(
+          (eventId): eventId is string =>
+            !!eventId && !knownEventIds.has(eventId),
+        );
+      if (orphanIds.length === 0) return;
+
+      this.logger.warn(
+        `Sweeping ${orphanIds.length} orphaned calendar event(s) for plan ${planId} with no task_event record`,
+      );
+      await rollbackEvents({
+        calendarService: this.calendarService,
+        userId,
+        eventIds: orphanIds,
+        logger: this.logger,
+        context: { planId, phase: 'sweep' },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Orphan sweep failed for plan ${planId}; continuing with schedule`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
   }
 
   async getLeafTasks(planId: string) {
@@ -264,6 +333,44 @@ type IGetCalendarProps = Parameters<CalendarService['getCalendarRange']>[0] & {
   client: CalendarService;
 };
 
+// ─── Rollback ──────────────────────────────────────────────────────────────────
+
+// Best-effort delete of events already created via the Google API when a
+// later step fails. Swallows its own failure: the caller is already
+// unwinding a real error, and that's what the user needs to see — a cleanup
+// failure here must not mask it. Logs loudly, since these ids are the
+// residual leak surface if the delete itself fails.
+export const rollbackEvents = async ({
+  calendarService,
+  userId,
+  eventIds,
+  logger,
+  context,
+}: {
+  calendarService: CalendarService;
+  userId: string;
+  eventIds: string[];
+  logger: Logger;
+  context: Record<string, unknown>;
+}): Promise<void> => {
+  if (eventIds.length === 0) return;
+  try {
+    const client = await calendarService.getClient(userId);
+    await calendarService.removeEvents({
+      client,
+      calendarId: 'primary',
+      events: eventIds,
+    });
+  } catch (cleanupErr) {
+    logger.error(
+      `Calendar rollback failed; events are orphaned with no DB record: ${JSON.stringify(
+        { ...context, orphanedEventIds: eventIds },
+      )}`,
+      cleanupErr instanceof Error ? cleanupErr.stack : String(cleanupErr),
+    );
+  }
+};
+
 // ─── Apply schedule ────────────────────────────────────────────────────────────
 
 interface IScheduledLeaf {
@@ -274,37 +381,70 @@ interface IScheduledLeaf {
   end: string;
 }
 
-const applySchedule = async ({
+export const applySchedule = async ({
   userId,
   planId,
   client,
   timeZone,
   schedule,
+  logger,
 }: IScheduleEventToCalendar) => {
-  const results = await Promise.all(
+  const deadlineAt = Date.now() + SCHEDULE_DEADLINE_MS;
+
+  // allSettled, not all: Promise.all rejects the moment one insert fails
+  // while its siblings are STILL IN FLIGHT. Those siblings go on to create
+  // real events after we've already unwound — a catch here can't clean up
+  // events that don't exist yet. allSettled guarantees every insert has
+  // settled before we decide anything, so the fulfilled set is complete and
+  // fully deletable.
+  const results = await Promise.allSettled(
     schedule.map((record) =>
       limit(() =>
-        withRetry(() =>
-          insertCalendarEvent({
-            userId,
-            planId,
-            client,
-            timeZone,
-            event: record,
-          }),
-        ),
+        insertCalendarEvent({
+          userId,
+          planId,
+          client,
+          timeZone,
+          event: record,
+          deadlineAt,
+        }),
       ),
     ),
   );
 
-  const taskEvents = results.map((googleEventId, i) => ({
-    taskId: schedule[i].id,
-    googleEventId,
-    start: schedule[i].start,
-    end: schedule[i].end,
-  }));
+  const taskEvents: Array<{
+    taskId: string;
+    googleEventId: string;
+    start: string;
+    end: string;
+  }> = [];
+  const failures: unknown[] = [];
 
-  return { eventRes: results, taskEvents };
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      taskEvents.push({
+        taskId: schedule[i].id,
+        googleEventId: result.value,
+        start: schedule[i].start,
+        end: schedule[i].end,
+      });
+    } else {
+      failures.push(result.reason);
+    }
+  });
+
+  if (failures.length > 0) {
+    await rollbackEvents({
+      calendarService: client,
+      userId,
+      eventIds: taskEvents.map((e) => e.googleEventId),
+      logger,
+      context: { planId, phase: 'insert' },
+    });
+    throw failures[0];
+  }
+
+  return { taskEvents };
 };
 
 interface IScheduleEventToCalendar {
@@ -313,6 +453,7 @@ interface IScheduleEventToCalendar {
   timeZone: string;
   client: CalendarService;
   schedule: IScheduledLeaf[];
+  logger: Logger;
 }
 
 const insertCalendarEvent = async ({
@@ -321,6 +462,7 @@ const insertCalendarEvent = async ({
   client,
   timeZone,
   event,
+  deadlineAt,
 }: IInsertCalendarEvent): Promise<string> => {
   const privateProperties = { plan_id: planId, task_id: event.id };
 
@@ -338,6 +480,7 @@ const insertCalendarEvent = async ({
         },
       },
     },
+    deadlineAt,
   });
 
   if (!createdCalendarEvent.id)
@@ -351,4 +494,5 @@ interface IInsertCalendarEvent
     'userId' | 'planId' | 'client' | 'timeZone'
   > {
   event: IScheduledLeaf;
+  deadlineAt?: number;
 }

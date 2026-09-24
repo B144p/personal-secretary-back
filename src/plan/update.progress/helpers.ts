@@ -6,11 +6,11 @@ import utc from 'dayjs/plugin/utc';
 import pLimit from 'p-limit';
 import { CalendarService } from 'src/calendar/calendar.service';
 import { PrismaService } from 'src/prisma/prisma.service';
-import { withRetry } from 'src/utils';
 import { orderLeavesByTree } from '../leaf-select';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 import { computeParentStatusRollup } from './classify';
+import { buildEarlyMarkerGroups, type IEarlyMarkerTask } from './early-marker';
 import type { IStatusChange, LeafTask, PlanWithTasks } from './interface';
 
 dayjs.extend(utc);
@@ -83,32 +83,9 @@ export const persistDailyFeedback = async (
 export const cleanupHeldLeaves = async (
   userId: string,
   heldLeaves: LeafTask[],
-  { prisma, calendarService, logger }: StepDeps,
-): Promise<void> => {
-  if (heldLeaves.length === 0) return;
-  try {
-    const calClient = await calendarService.getClient(userId);
-    const eventIds = heldLeaves.flatMap((t) =>
-      t.events.map((e) => e.google_event_id),
-    );
-    await calendarService.removeEvents({
-      client: calClient,
-      events: eventIds,
-    });
-    await prisma.taskEvent.updateMany({
-      where: {
-        task_id: { in: heldLeaves.map((t) => t.id) },
-        is_active: true,
-      },
-      data: { is_active: false },
-    });
-  } catch (err) {
-    logger.warn(
-      'Failed to clean up calendar event(s) for held task(s)',
-      err instanceof Error ? err.stack : String(err),
-    );
-  }
-};
+  deps: StepDeps,
+): Promise<void> =>
+  cleanupLeavesCalendarEvents(userId, heldLeaves, 'held', deps);
 
 // Step 4b. Re-derive every parent's status (DONE / IN_PROGRESS / HOLD /
 // PENDING) from its children, cascading up multiple levels — a parent's
@@ -257,22 +234,20 @@ export const applyRuleReschedule = async (
         if (isPendingWithEvent) {
           try {
             // PENDING task: no work history to preserve — shift the existing event in place.
-            await withRetry(async () => {
-              await calendarService.patchEvent({
-                userId,
-                eventId: meta.activeEvent!.google_event_id,
-                requestBody: {
-                  summary: item.title ?? '',
-                  start: {
-                    dateTime: item.start,
-                    timeZone: userState.time_zone,
-                  },
-                  end: {
-                    dateTime: item.end,
-                    timeZone: userState.time_zone,
-                  },
+            await calendarService.patchEvent({
+              userId,
+              eventId: meta.activeEvent!.google_event_id,
+              requestBody: {
+                summary: item.title ?? '',
+                start: {
+                  dateTime: item.start,
+                  timeZone: userState.time_zone,
                 },
-              });
+                end: {
+                  dateTime: item.end,
+                  timeZone: userState.time_zone,
+                },
+              },
             });
             await prisma.$transaction(
               buildActiveTaskEventWrite(prisma, {
@@ -297,16 +272,14 @@ export const applyRuleReschedule = async (
           // IN_PROGRESS (or no existing event, or PENDING fallback after failed patch):
           // insert a new Google event and deactivate the old task_event.
           // IN_PROGRESS slipped tasks keep their old calendar event as a work-history record.
-          const googleEventId = await withRetry(() =>
-            limit(() =>
-              insertCalendarEvent({
-                userId,
-                planId,
-                client: calendarService,
-                timeZone: userState.time_zone,
-                event: item,
-              }),
-            ),
+          const googleEventId = await limit(() =>
+            insertCalendarEvent({
+              userId,
+              planId,
+              client: calendarService,
+              timeZone: userState.time_zone,
+              event: item,
+            }),
           );
 
           await prisma.$transaction(
@@ -355,27 +328,98 @@ export const applyRuleReschedule = async (
   return { rescheduledCount, unscheduledTaskIds, rescheduleFailed };
 };
 
-// Step 9. Record a marker event for tasks finished ahead of schedule. The
-// original scheduled event is left untouched; best-effort like above.
-export const applyDoneMarkers = async (
+// Step 8b. Early-completed tasks (DONE, ahead of their scheduled event) have
+// no other flow that cleans up their now-stale original event — HOLD-early
+// leaves are handled by cleanupHeldLeaves, IN_PROGRESS-early leaves are
+// re-slotted by applyRuleReschedule. Remove the original Google event and
+// deactivate its TaskEvent so only the "Early task" marker remains.
+// Best-effort — must not turn already-committed status changes into a 500.
+export const cleanupCompletedEarly = async (
+  userId: string,
+  completedEarly: LeafTask[],
+  deps: StepDeps,
+): Promise<void> =>
+  cleanupLeavesCalendarEvents(userId, completedEarly, 'early-completed', deps);
+
+// Shared by cleanupHeldLeaves/cleanupCompletedEarly: deletes each task's
+// calendar event(s) independently (one task's failure must not block
+// another's) and only deactivates the TaskEvent rows for tasks whose delete
+// actually succeeded — deactivating on a failed delete would leave the DB
+// saying "inactive" for an event that's still really on the calendar, the
+// inverse of the orphan state the schedule sweep looks for. Best-effort —
+// must not turn already-committed status changes into a 500.
+const cleanupLeavesCalendarEvents = async (
+  userId: string,
+  leaves: LeafTask[],
+  label: string,
+  { prisma, calendarService, logger }: StepDeps,
+): Promise<void> => {
+  if (leaves.length === 0) return;
+  try {
+    const calClient = await calendarService.getClient(userId);
+    const succeededTaskIds: string[] = [];
+    await Promise.all(
+      leaves.map(async (task) => {
+        const eventIds = task.events.map((e) => e.google_event_id);
+        if (eventIds.length === 0) {
+          succeededTaskIds.push(task.id);
+          return;
+        }
+        try {
+          await calendarService.removeEvents({
+            client: calClient,
+            events: eventIds,
+          });
+          succeededTaskIds.push(task.id);
+        } catch (err) {
+          logger.warn(
+            `Failed to clean up calendar event(s) for ${label} task ${task.id}`,
+            err instanceof Error ? err.stack : String(err),
+          );
+        }
+      }),
+    );
+    if (succeededTaskIds.length === 0) return;
+    await prisma.taskEvent.updateMany({
+      where: {
+        task_id: { in: succeededTaskIds },
+        is_active: true,
+      },
+      data: { is_active: false },
+    });
+  } catch (err) {
+    logger.warn(
+      `Failed to clean up calendar event(s) for ${label} task(s)`,
+      err instanceof Error ? err.stack : String(err),
+    );
+  }
+};
+
+// Step 9. Record one marker event per status for leaves changed ahead of
+// their scheduled event (DONE / IN_PROGRESS / HOLD) — e.g. "[DONE] Early
+// task" listing every task completed early in this submission. Best-effort.
+export const applyEarlyMarkers = async (
   userId: string,
   planId: string,
-  completedEarly: LeafTask[],
+  earlyLeaves: LeafTask[],
   userState: UserState,
-  { calendarService, logger }: Pick<StepDeps, 'calendarService' | 'logger'>,
+  feedbackDay: dayjs.Dayjs,
+  { prisma, calendarService, logger }: StepDeps,
 ): Promise<void> => {
-  if (completedEarly.length === 0) return;
+  if (earlyLeaves.length === 0) return;
   try {
-    await createDoneMarkerEvents({
+    await createEarlyMarkerEvents({
       userId,
       planId,
-      tasks: completedEarly,
+      tasks: earlyLeaves,
       userState,
+      feedbackDay,
+      prisma,
       calendarService,
     });
   } catch (err) {
     logger.error(
-      'Failed to create done-marker calendar events',
+      'Failed to create early-marker calendar events',
       err instanceof Error ? err.stack : String(err),
     );
   }
@@ -503,70 +547,84 @@ const insertCalendarEvent = async ({
   return createdEvent.id;
 };
 
-// Records work finished ahead of schedule as a marker event, stacked after
-// working hours on the day it was actually completed. The originally
-// scheduled event for the task is left untouched.
-const createDoneMarkerEvents = async ({
+// Records leaves changed ahead of their scheduled event as one marker event
+// per status, stacked after working hours on the day the change happened.
+// The tasks' own original events are handled elsewhere (cleanupHeldLeaves
+// for HOLD, applyRuleReschedule for IN_PROGRESS, cleanupCompletedEarly for
+// DONE) — this only ever adds the marker.
+const EARLY_MARKER_MINUTES = 15;
+
+const createEarlyMarkerEvents = async ({
   userId,
   planId,
   tasks,
   userState,
+  feedbackDay,
+  prisma,
   calendarService,
 }: {
   userId: string;
   planId: string;
-  tasks: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    estimated_minutes: number | null;
-  }>;
+  tasks: IEarlyMarkerTask[];
   userState: UserState;
+  feedbackDay: dayjs.Dayjs;
+  prisma: PrismaService;
   calendarService: CalendarService;
 }) => {
+  const groups = buildEarlyMarkerGroups(tasks);
+
   const [endHour, endMinute] = userState.working_hours_end
     .split(':')
     .map(Number);
-  let cursor = dayjs()
-    .tz(userState.time_zone)
+  let cursor = feedbackDay
     .hour(endHour)
     .minute(endMinute)
     .second(0)
     .millisecond(0);
 
-  for (const task of tasks) {
-    const durationMinutes = task.estimated_minutes ?? 30;
+  for (const group of groups) {
     const start = cursor;
-    const end = cursor.add(durationMinutes, 'minute');
+    const end = cursor.add(EARLY_MARKER_MINUTES, 'minute');
 
-    await withRetry(() =>
-      limit(() =>
-        calendarService.insertEvent({
-          userId,
-          request: {
-            params: {
-              calendarId: 'primary',
-              requestBody: {
-                summary: task.title,
-                description: task.description ?? undefined,
-                start: {
-                  dateTime: start.format(),
-                  timeZone: userState.time_zone,
-                },
-                end: { dateTime: end.format(), timeZone: userState.time_zone },
-                extendedProperties: {
-                  private: {
-                    plan_id: planId,
-                    task_id: task.id,
-                    done_marker: 'true',
-                  },
+    const markerEventId = await limit(async () => {
+      const created = await calendarService.insertEvent({
+        userId,
+        request: {
+          params: {
+            calendarId: 'primary',
+            requestBody: {
+              summary: group.summary,
+              description: group.description,
+              start: {
+                dateTime: start.format(),
+                timeZone: userState.time_zone,
+              },
+              end: { dateTime: end.format(), timeZone: userState.time_zone },
+              extendedProperties: {
+                private: {
+                  plan_id: planId,
+                  early_marker: 'true',
+                  status: group.status,
                 },
               },
             },
           },
-        }),
-      ),
-    );
+        },
+      });
+      if (!created.id)
+        throw new Error('Google Calendar did not return event id');
+      return created.id;
+    });
+
+    await prisma.taskEvent.createMany({
+      data: group.taskIds.map((taskId) => ({
+        task_id: taskId,
+        google_event_id: markerEventId,
+        start: start.toDate(),
+        end: end.toDate(),
+        is_active: false,
+      })),
+    });
 
     cursor = end;
   }

@@ -26,6 +26,8 @@ export interface IInsertEvent extends IUserReq {
     params: calendar_v3.Params$Resource$Events$Insert;
     options?: MethodOptions;
   };
+  /** Absolute ms epoch shared across a batch of inserts — bounds total retry time. */
+  deadlineAt?: number;
 }
 
 export interface IRemoveEvents {
