@@ -18,14 +18,32 @@ import { JwtOrPatGuard } from 'src/common/guards/jwt-or-pat.guard';
 import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { generatePlanSchema } from './dto/generate-plan.dto';
+import { importPlanSchema } from './dto/import-plan.dto';
 import { reGeneratePlanSchema } from './dto/re-generate-plan.dto';
+import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
 import { UpdateProgressService } from './update.progress';
 
 @Controller('plan')
 @UseGuards(JwtOrPatGuard, ApprovedGuard)
 export class PlanController {
-  constructor(private readonly planService: PlanService) {}
+  constructor(
+    private readonly planService: PlanService,
+    private readonly planImportService: PlanImportService,
+  ) {}
+
+  // Plan written by Claude Code in plan mode — no OpenAI, no calendar.
+  @Throttle({ default: { ttl: 3600000, limit: 60 } })
+  @Post('import')
+  async import(@Req() req: Request, @Body() body: unknown) {
+    const parsed = importPlanSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
+    return await this.planImportService.importPlan(
+      validateJwtPayload(req.user).sub,
+      parsed.data,
+    );
+  }
 
   @Throttle({ default: { ttl: 3600000, limit: 10 } })
   @Post('generate')
