@@ -125,9 +125,11 @@ export const registerTools = (server: McpServer, api: Api) => {
     {
       title: 'Create plan',
       description: [
-        'Save an approved implementation plan to Personal Secretary as a DRAFT plan with tasks.',
-        "Call this after the user approves a plan (e.g. right after exiting plan mode), passing the plan's steps as tasks in order.",
-        'Use children for sub-steps of a step.',
+        'Save an implementation plan written in plan mode to Personal Secretary as a DRAFT plan with tasks.',
+        'Call this exactly once per plan, before starting to implement it and before any file edit.',
+        'This applies whether the user approved the plan at the plan-mode prompt, or dismissed the prompt (e.g. pressed ESC, switched model or mode) and then told you to go ahead.',
+        'Do not call it again for the same plan; call it again only for a newly written plan.',
+        "Pass the plan's steps as tasks in order, and use children for sub-steps of a step.",
         `Limits: at most ${IMPORT_MAX_DEPTH + 1} levels and ${IMPORT_MAX_TASKS} tasks in total.`,
         'This never calls an AI model and never books calendar events.',
       ].join(' '),
