@@ -7,6 +7,7 @@ import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
 import { IGetDetailProps, IGetListProps, IRemovePlanProps } from './interfaces';
 import { GeneratePlanService } from './plan.generate';
+import { assertNotClaudeCodePlan } from './source-guard';
 
 @Injectable()
 export class PlanService {
@@ -89,6 +90,8 @@ export class PlanService {
       include: { tasks: true },
     });
     if (!plan) throw new NotFoundException('Plan not found');
+    // Must run before any calendar cleanup or task deletion below.
+    assertNotClaudeCodePlan(plan, 're_generate');
 
     // Determine the subtree root
     const rootTaskId = dto.task_id ?? null;
