@@ -1,13 +1,12 @@
 import { Body, Controller, Get, Put, Req, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
 import { ApprovedGuard } from 'src/common/guards/approved.guard';
-import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
+import { JwtOrPatGuard } from 'src/common/guards/jwt-or-pat.guard';
 import { IJwtSignData } from 'src/utils';
 import { UserService } from './user.service';
 
 @Controller('me')
-@UseGuards(AuthGuard(JWT_STRATEGY_NAME))
+@UseGuards(JwtOrPatGuard)
 export class UserController {
   constructor(private readonly userService: UserService) {}
 

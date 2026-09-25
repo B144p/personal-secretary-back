@@ -14,6 +14,7 @@ import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { ApprovedGuard } from 'src/common/guards/approved.guard';
+import { JwtOrPatGuard } from 'src/common/guards/jwt-or-pat.guard';
 import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { generatePlanSchema } from './dto/generate-plan.dto';
@@ -22,7 +23,7 @@ import { PlanService } from './plan.service';
 import { UpdateProgressService } from './update.progress';
 
 @Controller('plan')
-@UseGuards(AuthGuard(JWT_STRATEGY_NAME), ApprovedGuard)
+@UseGuards(JwtOrPatGuard, ApprovedGuard)
 export class PlanController {
   constructor(private readonly planService: PlanService) {}
 
