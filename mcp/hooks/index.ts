@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 // Both are dependency-free (no Nest, no Prisma), so this stays fast.
 import { parsePlanMarkdown } from '../../src/plan/plan.import/markdown';
 import { createApi } from '../api';
@@ -34,8 +34,14 @@ interface HookInput {
   session_id: string;
   cwd?: string;
   hook_event_name?: string;
+  permission_mode?: string;
   tool_name?: string;
-  tool_input?: { plan?: unknown; planFilePath?: unknown };
+  tool_input?: {
+    plan?: unknown;
+    planFilePath?: unknown;
+    file_path?: unknown;
+    notebook_path?: unknown;
+  };
   tool_response?: unknown;
 }
 
@@ -155,6 +161,14 @@ const sourceIdFor = (cwd: string) => {
   return cwd;
 };
 
+const isPlanningEdit = (input: HookInput) => {
+  if (input.permission_mode === 'plan') return true;
+  const target = input.tool_input?.file_path ?? input.tool_input?.notebook_path;
+  if (typeof target !== 'string') return false;
+  const path = resolve(input.cwd ?? process.cwd(), target);
+  return path.startsWith(PLANS_DIR + sep);
+};
+
 const cleanupStale = () => {
   for (const dir of [PENDING_DIR, SENT_DIR]) {
     if (!existsSync(dir)) continue;
@@ -243,6 +257,10 @@ const handlers: Record<string, (input: HookInput) => void | Promise<void>> = {
   // First edit of the session with a plan still pending, i.e. the user
   // dismissed the prompt (ESC, switched model/mode) and then said go.
   'first-edit': async (input) => {
+    // Still planning: after "No, keep planning" Claude edits its plan file,
+    // which is not the start of work. Sending then would save the rejected
+    // draft, and the revised plan would become a second Plan.
+    if (isPlanningEdit(input)) return;
     const pending = readJson<Pending>(fileFor(PENDING_DIR, input.session_id));
     if (!pending) return;
     const saved = await send(input.session_id, pending);
