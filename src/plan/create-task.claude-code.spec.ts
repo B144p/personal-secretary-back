@@ -21,8 +21,11 @@ describe('PlanService.createTask on active plans', () => {
     status: EPlanStatus;
   }) => {
     const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(),
       plan: {
         findUnique: jest.fn().mockResolvedValue({ id: 'plan1', ...plan }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ status: plan.status }),
         update: jest.fn(),
       },
       task: {
@@ -43,6 +46,10 @@ describe('PlanService.createTask on active plans', () => {
         update: jest.fn(),
       },
     };
+    // The transaction client is the same mock, so writes are observable.
+    prisma.$transaction.mockImplementation(
+      (fn: (tx: typeof prisma) => unknown) => fn(prisma),
+    );
     const service = new PlanService(
       prisma as unknown as PrismaService,
       {} as UserService,
@@ -64,6 +71,8 @@ describe('PlanService.createTask on active plans', () => {
       body: { title: 'Fix flaky test found on the way', parent_task_id: 'A' },
     });
 
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.task.create).toHaveBeenCalled();
     expect(prisma.task.update).toHaveBeenCalledWith({
       where: { id: 'A' },

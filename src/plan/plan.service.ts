@@ -12,6 +12,7 @@ import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
 import { IGetDetailProps, IGetListProps, IRemovePlanProps } from './interfaces';
 import { GeneratePlanService } from './plan.generate';
+import { lockPlanRow, ROLLUP_TX_OPTIONS } from './plan.status/lock';
 import { rollupTaskStatus } from './plan.status/rollup';
 import { assertNotClaudeCodePlan } from './source-guard';
 
@@ -429,18 +430,28 @@ export class PlanService {
         where: { plan_id: planId, parent_task_id: parent_task_id ?? null },
       }));
 
-    const task = await this.prisma.task.create({
-      data: {
-        ...rest,
-        plan_id: planId,
-        parent_task_id: parent_task_id ?? null,
-        depth,
-        sequence_order: finalSequenceOrder,
-      },
-    });
+    const data = {
+      ...rest,
+      plan_id: planId,
+      parent_task_id: parent_task_id ?? null,
+      depth,
+      sequence_order: finalSequenceOrder,
+    };
+    if (!isClaudeCode || plan.status === EPlanStatus.DRAFT) {
+      return this.prisma.task.create({ data });
+    }
+
     // New open work reopens closed ancestors and a finished Claude Code plan.
-    if (isClaudeCode && plan.status !== EPlanStatus.DRAFT) {
-      const tasks = await this.prisma.task.findMany({
+    // Same lock as the status rollup, so a concurrent update_task_status
+    // can't overwrite this rollup (or the reverse), and it's all-or-nothing.
+    return this.prisma.$transaction(async (tx) => {
+      await lockPlanRow(tx, planId);
+      const locked = await tx.plan.findUniqueOrThrow({
+        where: { id: planId },
+        select: { status: true },
+      });
+      const task = await tx.task.create({ data });
+      const tasks = await tx.task.findMany({
         where: { plan_id: planId },
         select: { id: true, parent_task_id: true, status: true },
       });
@@ -448,19 +459,19 @@ export class PlanService {
         tasks,
         changedId: task.id,
         newStatus: task.status,
-        planStatus: plan.status,
+        planStatus: locked.status,
       });
       for (const [id, status] of rollup.tasks) {
-        await this.prisma.task.update({ where: { id }, data: { status } });
+        await tx.task.update({ where: { id }, data: { status } });
       }
-      if (rollup.plan !== plan.status) {
-        await this.prisma.plan.update({
+      if (rollup.plan !== locked.status) {
+        await tx.plan.update({
           where: { id: planId },
           data: { status: rollup.plan },
         });
       }
-    }
-    return task;
+      return task;
+    }, ROLLUP_TX_OPTIONS);
   }
 
   async deleteTask({
