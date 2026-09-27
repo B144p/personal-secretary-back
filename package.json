@@ -19,9 +19,13 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "grant-admin": "ts-node -r tsconfig-paths/register prisma/grant-admin.ts",
-    "revoke-admin": "ts-node -r tsconfig-paths/register prisma/revoke-admin.ts"
+    "revoke-admin": "ts-node -r tsconfig-paths/register prisma/revoke-admin.ts",
+    "create-pat": "ts-node -r tsconfig-paths/register prisma/create-pat.ts",
+    "revoke-pat": "ts-node -r tsconfig-paths/register prisma/revoke-pat.ts",
+    "mcp:dev": "tsx mcp/index.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -78,6 +82,7 @@
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
   },

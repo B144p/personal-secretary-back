@@ -4,6 +4,7 @@ import { UserModule } from 'src/user/user.module';
 import { CalendarScheduleService } from './calendar.schedule';
 import { PlanController, PlanProgressController } from './plan.controller';
 import { GeneratePlanService } from './plan.generate';
+import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
 import { UpdateProgressService } from './update.progress';
 
@@ -14,6 +15,7 @@ import { UpdateProgressService } from './update.progress';
     PlanService,
     CalendarScheduleService,
     GeneratePlanService,
+    PlanImportService,
     UpdateProgressService,
   ],
 })

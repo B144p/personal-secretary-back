@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
+import { EPlanSourceType, EPlanStatus } from '@prisma/client';
 import { calendar_v3 } from 'googleapis';
 import { AiTask, getModelForTask } from 'src/openai/ai-task';
 import { CalendarService } from 'src/calendar/calendar.service';
@@ -14,6 +14,7 @@ import {
   IGeneratePlanResponse,
   ITaskNode,
 } from '../schemas';
+import { insertTaskTree, loadPlanWithTaskTree } from '../task-tree';
 import type {
   IGeneratePlanProps,
   IGenerateTaskProps,
@@ -295,79 +296,6 @@ const updatePlan = async ({
   });
 
   return loadPlanWithTaskTree(client, planId as string);
-};
-
-const loadPlanWithTaskTree = async (client: PrismaService, planId: string) => {
-  const plan = await client.plan.findUnique({
-    where: { id: planId },
-    include: {
-      tasks: {
-        include: { events: { where: { is_active: true } } },
-        orderBy: [{ depth: 'asc' }, { sequence_order: 'asc' }],
-      },
-    },
-  });
-  if (!plan) return null;
-  const { tasks, ...rest } = plan;
-  const byParent = new Map<string | null, (typeof tasks)[number][]>();
-  for (const t of tasks) {
-    const key = t.parent_task_id;
-    if (!byParent.has(key)) byParent.set(key, []);
-    byParent.get(key)!.push(t);
-  }
-  const build = (parentId: string | null): unknown[] =>
-    (byParent.get(parentId) ?? [])
-      .sort((a, b) => a.sequence_order - b.sequence_order)
-      .map((t) => ({
-        ...t,
-        description: t.description ?? '',
-        children: build(t.id),
-      }));
-  return {
-    ...rest,
-    source_type: rest.source_type ?? 'GENERATE',
-    tasks: build(null),
-  };
-};
-
-const insertTaskTree = async ({
-  client,
-  planId,
-  tasks,
-  parentId,
-  depth,
-}: {
-  client: PrismaService;
-  planId: string;
-  tasks: ITaskNode[];
-  parentId: string | null;
-  depth: number;
-}) => {
-  for (const task of tasks) {
-    const isLeaf = task.children.length === 0;
-    const created = await client.task.create({
-      data: {
-        plan_id: planId,
-        title: task.title,
-        description: task.description,
-        status: ETaskStatus.PENDING,
-        parent_task_id: parentId,
-        depth,
-        sequence_order: task.sequence_order,
-        estimated_minutes: isLeaf ? task.estimated_minutes : null,
-      },
-    });
-
-    if (task.children.length > 0) {
-      await insertTaskTree({
-        client,
-        planId,
-        tasks: task.children,
-        parentId: created.id,
-        depth: depth + 1,
-      });
-    }
-  }
 };
 
 // ─── Regenerate ──────────────────────────────────────────────────────────────

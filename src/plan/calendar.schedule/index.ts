@@ -9,6 +9,7 @@ import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ITaskScheduleProps } from '../interfaces';
 import { selectSchedulableLeavesInOrder } from '../leaf-select';
+import { assertNotClaudeCodePlan } from '../source-guard';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 
@@ -62,6 +63,14 @@ export class CalendarScheduleService {
     userId,
     id,
   }: ITaskScheduleProps) {
+    // Single choke point for every path that books calendar events
+    // (schedule, resume) — Claude Code plans never touch the calendar.
+    const source = await this.prisma.plan.findFirst({
+      where: { id, user_id: userId },
+      select: { source_type: true },
+    });
+    if (source) assertNotClaudeCodePlan(source, 'schedule');
+
     // Reject if another plan is already SCHEDULED
     const otherScheduled = await this.prisma.plan.findFirst({
       where: {

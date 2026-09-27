@@ -19,11 +19,29 @@ model User {
   created_at    DateTime    @default(now()) @map("create_at")
   updated_at    DateTime    @updatedAt @map("update_at")
 
-  user_state UserState?
-  ai_setting AiSetting?
-  plan       Plan[]
+  user_state             UserState?
+  ai_setting             AiSetting?
+  plan                   Plan[]
+  personal_access_tokens PersonalAccessToken[]
 
   @@map("user")
+}
+
+/// Long-lived token for non-browser clients (e.g. the Claude Code MCP server).
+/// Only the sha256 hash of the raw token is stored.
+model PersonalAccessToken {
+  id           String    @id @default(uuid())
+  user_id      String
+  name         String
+  token_hash   String    @unique
+  last_used_at DateTime?
+  revoked_at   DateTime?
+  created_at   DateTime  @default(now()) @map("create_at")
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("personal_access_token")
 }
 
 model UserState {
@@ -188,6 +206,7 @@ enum EEventCategory {
 enum EPlanSourceType {
   GENERATE
   CALENDAR
+  CLAUDE_CODE
 }
 
 enum EPlanStatus {
