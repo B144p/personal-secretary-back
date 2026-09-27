@@ -41,6 +41,7 @@ interface HookInput {
     planFilePath?: unknown;
     file_path?: unknown;
     notebook_path?: unknown;
+    title?: unknown;
   };
   tool_response?: unknown;
 }
@@ -54,6 +55,7 @@ interface Pending {
 
 interface Sent {
   hash: string;
+  title: string;
   plan_id: string | null;
   via: 'hook' | 'create_plan';
   sent_at: string;
@@ -66,6 +68,16 @@ const SENT_DIR = join(STATE_DIR, 'sent');
 const LOG_FILE = join(STATE_DIR, 'hook.log');
 const PLANS_DIR = join(homedir(), '.claude', 'plans');
 const STALE_MS = 7 * 24 * 3600 * 1000;
+const DUPLICATE_WINDOW_MS = 15 * 60 * 1000;
+
+// "[DEV] Plan: CSV export" and "csv export" are the same plan title.
+const normalizeTitle = (t: string) =>
+  t
+    .replace(/^\[dev\]\s*/i, '')
+    .replace(/^plan\s*[:\-—–]\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
 const log = (message: string) => {
   try {
@@ -211,6 +223,7 @@ const send = async (sessionId: string, pending: Pending) => {
   });
   const sent: Sent = {
     hash: pending.hash,
+    title,
     plan_id: plan.id,
     via: 'hook',
     sent_at: new Date().toISOString(),
@@ -269,11 +282,20 @@ const handlers: Record<string, (input: HookInput) => void | Promise<void>> = {
     if (saved) output('PreToolUse', { additionalContext: savedContext(saved) });
   },
 
-  // The hook already saved this session's plan and nothing newer is pending.
+  // Deny a second save of the plan the hook already sent: same title, or
+  // right after the save (Claude following an old "call create_plan" habit
+  // may retitle it). Any other create_plan is a new plan and goes through.
   'create-pre': (input) => {
     if (existsSync(fileFor(PENDING_DIR, input.session_id))) return;
     const sent = readJson<Sent>(fileFor(SENT_DIR, input.session_id));
     if (!sent) return;
+    const title =
+      typeof input.tool_input?.title === 'string' ? input.tool_input.title : '';
+    const sameTitle =
+      !!sent.title && normalizeTitle(title) === normalizeTitle(sent.title);
+    const justSaved =
+      Date.now() - Date.parse(sent.sent_at) < DUPLICATE_WINDOW_MS;
+    if (!sameTitle && !justSaved) return;
     output('PreToolUse', {
       permissionDecision: 'deny',
       permissionDecisionReason: `This plan was already saved to Personal Secretary as plan ${sent.plan_id} (${sent.via}). Do not save it again; use get_plan with that id to see its task ids.`,
@@ -291,6 +313,10 @@ const handlers: Record<string, (input: HookInput) => void | Promise<void>> = {
     const planId = /id ([0-9a-f-]{36})/.exec(response)?.[1] ?? null;
     writeJson(fileFor(SENT_DIR, input.session_id), {
       hash: pending.hash,
+      title:
+        typeof input.tool_input?.title === 'string'
+          ? input.tool_input.title
+          : '',
       plan_id: planId,
       via: 'create_plan',
       sent_at: new Date().toISOString(),

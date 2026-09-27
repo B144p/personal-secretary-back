@@ -65,8 +65,8 @@ to remember:
 | Claude submits the plan | `PreToolUse` `ExitPlanMode` → `stash` | Plan kept locally as *pending* for this session |
 | You approve it | `PostToolUse` `ExitPlanMode` → `approved` | Pending plan is sent; Claude gets the plan and task ids |
 | You press ESC (or switch model/mode), then say go | `PreToolUse` `Edit\|Write\|MultiEdit\|NotebookEdit` → `first-edit` | Pending plan is sent before the first edit |
-| Claude calls `create_plan` anyway | `PreToolUse`/`PostToolUse` `create_plan` | Denied if already saved; otherwise its list is used and the hook won't send again |
-| "No, keep planning" | – | Claude revises; the next submission replaces the pending plan |
+| Claude calls `create_plan` anyway | `PreToolUse`/`PostToolUse` `create_plan` | Denied if it repeats the saved plan (same title, or within 15 minutes of the save); a different plan goes through. On the ESC path Claude's list is used and the hook won't send again |
+| "No, keep planning" | – | Claude revises the plan file (plan-mode edits never trigger a send); the next submission replaces the pending plan |
 
 Details:
 
