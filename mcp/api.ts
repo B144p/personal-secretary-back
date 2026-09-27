@@ -19,7 +19,7 @@ export const createApi = ({
   token: string;
 }) => {
   const request = async <T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PATCH',
     path: string,
     body?: unknown,
   ): Promise<T> => {
@@ -59,6 +59,7 @@ export const createApi = ({
   return {
     get: <T>(path: string) => request<T>('GET', path),
     post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
+    patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   };
 };
 

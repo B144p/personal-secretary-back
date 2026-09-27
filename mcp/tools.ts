@@ -8,10 +8,11 @@ import {
   importPlanSchema,
   importTaskNodeSchema,
 } from '../src/plan/dto/import-plan.dto';
+import { TASK_STATUS_UPDATES } from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
 
-// Phase 1 surface: connect, read, create. There is intentionally no tool that
-// generates (OpenAI) or schedules (Google Calendar) a plan.
+// Connect, read, create, and report progress. There is intentionally no tool
+// that generates (OpenAI) or schedules (Google Calendar) a plan.
 
 const text = (value: unknown): CallToolResult => ({
   content: [
@@ -31,11 +32,13 @@ const fail = (err: unknown): CallToolResult => {
 };
 
 interface TaskOut {
+  id: string;
   title: string;
   status: string;
+  status_note?: string | null;
   children: TaskOut[];
 }
-interface PlanOut {
+export interface PlanOut {
   id: string;
   title: string;
   status: string;
@@ -48,13 +51,17 @@ interface PlanOut {
 const countTasks = (tasks: TaskOut[]): number =>
   tasks.reduce((n, t) => n + 1 + countTasks(t.children ?? []), 0);
 
-const outline = (tasks: TaskOut[], indent = ''): string =>
+// Ids are included so Claude can call update_task_status / add_task next.
+export const outline = (tasks: TaskOut[], indent = ''): string =>
   tasks
     .map(
       (t, i) =>
-        `${indent}${i + 1}. [${t.status}] ${t.title}\n${outline(t.children ?? [], indent + '   ')}`,
+        `${indent}${i + 1}. [${t.status}] ${t.title} (id ${t.id})${t.status_note ? ` — ${t.status_note}` : ''}\n${outline(t.children ?? [], indent + '   ')}`,
     )
     .join('');
+
+export const planSummary = (plan: PlanOut) =>
+  `Plan "${plan.title}" (${plan.status}, id ${plan.id}) with ${countTasks(plan.tasks)} tasks:\n\n${outline(plan.tasks)}`;
 
 export const registerTools = (server: McpServer, api: Api) => {
   server.registerTool(
@@ -129,6 +136,7 @@ export const registerTools = (server: McpServer, api: Api) => {
         'Call this exactly once per plan, before starting to implement it and before any file edit.',
         'This applies whether the user approved the plan at the plan-mode prompt, or dismissed the prompt (e.g. pressed ESC, switched model or mode) and then told you to go ahead.',
         'Do not call it again for the same plan; call it again only for a newly written plan.',
+        'If the personal-pm plan hook is installed it saves the plan automatically: when a "Saved as Personal Secretary plan" note has already appeared, do not call this tool.',
         "Pass the plan's steps as tasks in order, and use children for sub-steps of a step.",
         `Limits: at most ${IMPORT_MAX_DEPTH + 1} levels and ${IMPORT_MAX_TASKS} tasks in total.`,
         'This never calls an AI model and never books calendar events.',
@@ -159,8 +167,102 @@ export const registerTools = (server: McpServer, api: Api) => {
       }
       try {
         const plan = await api.post<PlanOut>('/plan/import', parsed.data);
+        return text(`Created. ${planSummary(plan)}`);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_plan',
+    {
+      title: 'Get plan',
+      description:
+        'Show one plan with its task tree, including task ids, statuses and status notes. Use it to find task ids for update_task_status and add_task.',
+      inputSchema: { plan_id: z.string().describe('Plan id') },
+    },
+    async ({ plan_id }) => {
+      try {
+        const plan = await api.get<PlanOut>(
+          `/plan/${encodeURIComponent(plan_id)}`,
+        );
+        return text(planSummary(plan));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'update_task_status',
+    {
+      title: 'Update task status',
+      description: [
+        'Report progress on a task of a Claude Code plan while implementing it.',
+        'Set IN_PROGRESS when you start a step, DONE when it is finished, and CANCELLED when it turned out unnecessary or impractical.',
+        'CANCELLED requires a note with the reason, so a later session does not redo work that was dropped on purpose.',
+        'Parent tasks and the plan status follow automatically: closing a parent closes its open sub-tasks, and the plan becomes DONE once every top-level task is DONE or CANCELLED.',
+      ].join(' '),
+      inputSchema: {
+        plan_id: z.string().describe('Plan id'),
+        task_id: z.string().describe('Task id (see get_plan)'),
+        status: z.enum(TASK_STATUS_UPDATES),
+        note: z
+          .string()
+          .optional()
+          .describe('Why the status changed. Required for CANCELLED.'),
+      },
+    },
+    async ({ plan_id, task_id, status, note }) => {
+      if (status === 'CANCELLED' && !note?.trim()) {
+        return {
+          ...text('A note with the reason is required for CANCELLED.'),
+          isError: true,
+        };
+      }
+      try {
+        const plan = await api.patch<PlanOut>(
+          `/plan/${encodeURIComponent(plan_id)}/tasks/${encodeURIComponent(task_id)}/status`,
+          { status, ...(note?.trim() && { note: note.trim() }) },
+        );
+        return text(`Updated. ${planSummary(plan)}`);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'add_task',
+    {
+      title: 'Add task',
+      description:
+        'Add a step discovered while implementing a Claude Code plan (e.g. a bug found on the way). Give the reason it was added. Optionally nest it under an existing task.',
+      inputSchema: {
+        plan_id: z.string().describe('Plan id'),
+        title: z.string().min(1).max(200).describe('Short task title'),
+        reason: z.string().min(1).max(2000).describe('Why this step was added'),
+        parent_task_id: z
+          .string()
+          .optional()
+          .describe('Parent task id, to add it as a sub-step'),
+      },
+    },
+    async ({ plan_id, title, reason, parent_task_id }) => {
+      try {
+        const id = encodeURIComponent(plan_id);
+        const task = await api.post<{ id: string; title: string }>(
+          `/plan/${id}/tasks`,
+          {
+            title,
+            description: reason,
+            ...(parent_task_id && { parent_task_id }),
+          },
+        );
+        const plan = await api.get<PlanOut>(`/plan/${id}`);
         return text(
-          `Created plan "${plan.title}" (${plan.status}, id ${plan.id}) with ${countTasks(plan.tasks)} tasks:\n\n${outline(plan.tasks)}`,
+          `Added task "${task.title}" (id ${task.id}). ${planSummary(plan)}`,
         );
       } catch (err) {
         return fail(err);
