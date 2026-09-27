@@ -27,8 +27,42 @@ export interface ParsedMarkdownPlan {
   tasks: MarkdownTask[];
 }
 
-const SKIP_SECTION =
-  /^(context|background|overview|summary|verification|verify|testing|tests? plan|how to (test|verify)|(critical|key|relevant) files|files( to (change|modify|touch))?|notes?|things to know|risks?|accepted cost|what .*found|out of scope|open questions|decisions?( made)?|scope|assumptions|references?|non-goals|left open|later|future( work)?|follow[- ]?ups?|next steps?)\b/i;
+// Background sections, matched against the whole heading (plus an optional
+// "(...)" qualifier) so work sections that merely start with one of these
+// words ("Notes API", "Summary endpoint", "Background sync worker") stay.
+const SKIP_NAMES = [
+  'context',
+  'background',
+  'overview',
+  'summary',
+  'verification',
+  'verify',
+  'test plan',
+  'how to (test|verify)',
+  '(critical|key|relevant) files',
+  'files( to (change|modify|touch))?',
+  'notes?',
+  'things to know',
+  'risks?',
+  'accepted cost',
+  'what .*found',
+  'out of scope',
+  'open questions',
+  'decisions?( made)?',
+  'scope',
+  'assumptions',
+  'references?',
+  'non-goals',
+  'left open',
+  'later',
+  'future( work)?',
+  'follow[- ]?ups?',
+  'next steps?',
+];
+const SKIP_SECTION = new RegExp(
+  `^(?:${SKIP_NAMES.join('|')})(?:\\s*\\([^)]*\\))?$`,
+  'i',
+);
 const CONTAINER_SECTION =
   /^(steps|work|commits|implementation( steps| plan)?|plan|tasks|changes|approach|execution|order of work|todo)$/i;
 

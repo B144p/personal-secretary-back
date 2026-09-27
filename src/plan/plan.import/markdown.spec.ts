@@ -91,6 +91,33 @@ Publish the artifact.
     expect(plan.tasks[1].children?.[1].description).toBe('- badge');
   });
 
+  it('skips only headings that are wholly a background name', () => {
+    const plan = parsePlanMarkdown(`# T
+
+## Context
+why
+
+## Step 2: Background sync worker
+## 3. Testing harness setup
+## Notes API
+## Summary endpoint
+## Files upload service
+
+## Verification (manual)
+- click it
+
+## What exploration found (drives the order)
+- stuff
+`);
+    expect(titles(plan.tasks)).toEqual([
+      'Background sync worker',
+      'Testing harness setup',
+      'Notes API',
+      'Summary endpoint',
+      'Files upload service',
+    ]);
+  });
+
   it('ignores headings and lists inside code fences', () => {
     const plan = parsePlanMarkdown(`# T
 
