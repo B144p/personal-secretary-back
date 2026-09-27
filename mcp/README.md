@@ -20,17 +20,30 @@ scheduling for them.
 2. Mint a token for your account. It is printed once, so copy it:
    ```sh
    npm run create-pat -- you@example.com claude-cli
+   # with pnpm, drop the "--": pnpm create-pat you@example.com claude-cli
    ```
-3. Register the server with Claude Code (user scope, so it's available in every repo):
+   The token lives in whichever DB `DATABASE_URL` points at, so a dev token
+   doesn't work against production. For production, run it once with the
+   production `DATABASE_URL`.
+3. Create `mcp/.env` (gitignored) from `mcp/.env.example`:
    ```sh
-   claude mcp add personal-pm --scope user \
-     -e PM_API_URL=http://localhost:3000 \
-     -e PM_TOKEN=psk_... \
-     -- npx --prefix /abs/path/to/personal-secretary-back tsx /abs/path/to/personal-secretary-back/mcp/index.ts
+   PM_API_URL=http://localhost:8000
+   PM_TOKEN=psk_...
    ```
-   Use your backend's real port for `PM_API_URL`.
-4. In Claude Code, run `/mcp`. `personal-pm` should show as connected with 3 tools.
+4. Register the server with Claude Code (user scope, so it's available in every repo).
+   You only need to do this once:
+   ```sh
+   claude mcp add personal-pm --scope user -- /abs/path/to/personal-secretary-back/mcp/run.sh
+   ```
+5. In Claude Code, run `/mcp`. `personal-pm` should show as connected with 3 tools.
    Then ask Claude to "call whoami".
+
+To switch between dev and production, edit `mcp/.env` and start a new Claude
+session; there's no need to re-register. `run.sh` runs the code from this
+checkout, so keep it on `main`.
+
+Without `mcp/.env`, `run.sh` uses `PM_API_URL` / `PM_TOKEN` from the
+environment instead, e.g. `claude mcp add personal-pm --scope user -e PM_API_URL=... -e PM_TOKEN=... -- .../mcp/run.sh`.
 
 To revoke the token: `npm run revoke-pat -- you@example.com claude-cli`.
 
@@ -69,6 +82,7 @@ hook makes saving guaranteed.
 ## Development
 
 - `npm run mcp:dev` runs the server directly. It waits for MCP JSON-RPC on stdin.
+  It does not load `mcp/.env`; `mcp/run.sh` does.
 - Logs go to **stderr** only, because stdout carries the protocol.
 - `mcp/` is excluded from `nest build` (`tsconfig.build.json`) and doesn't
   affect `dist/`.
