@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { EPlanSourceType, EPlanStatus } from '@prisma/client';
+import { EPlanSourceType, EPlanStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import type { ImportPlanDto, ImportTaskNode } from '../dto/import-plan.dto';
 import type { ITaskNode } from '../schemas';
@@ -15,6 +15,31 @@ export class PlanImportService {
   constructor(private readonly prisma: PrismaService) {}
 
   async importPlan(userId: string, dto: ImportPlanDto) {
+    if (dto.import_key) {
+      const existing = await this.findByImportKey(userId, dto.import_key);
+      if (existing) return existing;
+    }
+    try {
+      return await this.create(userId, dto);
+    } catch (err) {
+      // Two sends of the same key raced: the other one won, return its plan.
+      if (dto.import_key && isUniqueViolation(err)) {
+        const existing = await this.findByImportKey(userId, dto.import_key);
+        if (existing) return existing;
+      }
+      throw err;
+    }
+  }
+
+  private async findByImportKey(userId: string, importKey: string) {
+    const plan = await this.prisma.plan.findUnique({
+      where: { user_id_import_key: { user_id: userId, import_key: importKey } },
+      select: { id: true },
+    });
+    return plan ? loadPlanWithTaskTree(this.prisma, plan.id) : null;
+  }
+
+  private async create(userId: string, dto: ImportPlanDto) {
     const title =
       process.env.NODE_ENV === 'development' ? `[DEV] ${dto.title}` : dto.title;
 
@@ -26,6 +51,7 @@ export class PlanImportService {
             title,
             source_type: EPlanSourceType.CLAUDE_CODE,
             source_id: dto.source_id ?? null,
+            import_key: dto.import_key ?? null,
             status: EPlanStatus.DRAFT,
           },
         });
@@ -56,3 +82,6 @@ export const toTaskNodes = (nodes: ImportTaskNode[]): ITaskNode[] =>
     estimated_minutes: null,
     children: toTaskNodes(n.children ?? []),
   }));
+
+const isUniqueViolation = (err: unknown) =>
+  err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
