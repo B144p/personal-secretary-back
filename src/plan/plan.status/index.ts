@@ -4,6 +4,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import type { UpdateTaskStatusDto } from '../dto/update-task-status.dto';
 import { assertClaudeCodePlan } from '../source-guard';
 import { loadPlanWithTaskTree } from '../task-tree';
+import { lockPlanRow, ROLLUP_TX_OPTIONS } from './lock';
 import { rollupTaskStatus } from './rollup';
 
 // Task status reported by Claude Code while it works. Prisma only: no
@@ -25,6 +26,7 @@ export class PlanTaskStatusService {
     dto: UpdateTaskStatusDto;
   }) {
     return this.prisma.$transaction(async (tx) => {
+      await lockPlanRow(tx, planId);
       const plan = await tx.plan.findUnique({
         where: { id: planId, user_id: userId },
         include: {
@@ -59,6 +61,6 @@ export class PlanTaskStatusService {
       }
 
       return loadPlanWithTaskTree(tx, planId);
-    });
+    }, ROLLUP_TX_OPTIONS);
   }
 }
