@@ -20,8 +20,10 @@ import { validateJwtPayload } from 'src/utils';
 import { generatePlanSchema } from './dto/generate-plan.dto';
 import { importPlanSchema } from './dto/import-plan.dto';
 import { reGeneratePlanSchema } from './dto/re-generate-plan.dto';
+import { updateTaskStatusSchema } from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
+import { PlanTaskStatusService } from './plan.status';
 import { UpdateProgressService } from './update.progress';
 
 @Controller('plan')
@@ -30,6 +32,7 @@ export class PlanController {
   constructor(
     private readonly planService: PlanService,
     private readonly planImportService: PlanImportService,
+    private readonly planTaskStatusService: PlanTaskStatusService,
   ) {}
 
   // Plan written by Claude Code in plan mode — no OpenAI, no calendar.
@@ -97,6 +100,25 @@ export class PlanController {
       planId,
       taskId,
       body,
+    });
+  }
+
+  // Status reported by Claude Code as it works (CLAUDE_CODE plans only).
+  @Patch(':planId/tasks/:taskId/status')
+  async updateTaskStatus(
+    @Req() req: Request,
+    @Param('planId') planId: string,
+    @Param('taskId') taskId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = updateTaskStatusSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
+    return await this.planTaskStatusService.updateStatus({
+      userId: validateJwtPayload(req.user).sub,
+      planId,
+      taskId,
+      dto: parsed.data,
     });
   }
 

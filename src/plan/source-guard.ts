@@ -15,3 +15,17 @@ export const assertNotClaudeCodePlan = (
     );
   }
 };
+
+// The reverse: status reported by Claude Code only applies to its own plans.
+// Other plans keep their calendar-driven progress flow (/plan-progress).
+export const assertClaudeCodePlan = (
+  plan: { source_type: EPlanSourceType | null },
+  action: string,
+) => {
+  if (plan.source_type !== EPlanSourceType.CLAUDE_CODE) {
+    throw new AppException(
+      AppErrorCode.PLAN_SOURCE_NOT_SUPPORTED,
+      `Only Claude Code plans support ${action}`,
+    );
+  }
+};

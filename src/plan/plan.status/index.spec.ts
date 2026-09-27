@@ -1,0 +1,78 @@
+import { EPlanSourceType, EPlanStatus, ETaskStatus } from '@prisma/client';
+import { AppErrorCode } from 'src/common/errors/app-exception';
+import { PrismaService } from 'src/prisma/prisma.service';
+import { PlanTaskStatusService } from './index';
+
+describe('PlanTaskStatusService', () => {
+  const makeService = (sourceType: EPlanSourceType) => {
+    const tx = {
+      plan: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce({
+            id: 'plan1',
+            source_type: sourceType,
+            status: EPlanStatus.DRAFT,
+            tasks: [
+              { id: 'A', parent_task_id: null, status: ETaskStatus.PENDING },
+              { id: 'A1', parent_task_id: 'A', status: ETaskStatus.PENDING },
+            ],
+          })
+          .mockResolvedValue({ id: 'plan1', tasks: [] }),
+        update: jest.fn(),
+      },
+      task: { update: jest.fn() },
+      taskEvent: {
+        create: jest.fn(),
+        createMany: jest.fn(),
+        updateMany: jest.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+    return { tx, service: new PlanTaskStatusService(prisma) };
+  };
+
+  it('stores the status and note, rolls up the parent and plan, and never writes TaskEvents', async () => {
+    const { tx, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+    await service.updateStatus({
+      userId: 'u1',
+      planId: 'plan1',
+      taskId: 'A1',
+      dto: { status: 'CANCELLED', note: 'endpoint already existed' },
+    });
+
+    expect(tx.task.update).toHaveBeenCalledWith({
+      where: { id: 'A1' },
+      data: {
+        status: ETaskStatus.CANCELLED,
+        status_note: 'endpoint already existed',
+      },
+    });
+    expect(tx.task.update).toHaveBeenCalledWith({
+      where: { id: 'A' },
+      data: { status: ETaskStatus.CANCELLED },
+    });
+    expect(tx.plan.update).toHaveBeenCalledWith({
+      where: { id: 'plan1' },
+      data: { status: EPlanStatus.DONE },
+    });
+    expect(tx.taskEvent.create).not.toHaveBeenCalled();
+    expect(tx.taskEvent.createMany).not.toHaveBeenCalled();
+    expect(tx.taskEvent.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects plans that did not come from Claude Code', async () => {
+    const { tx, service } = makeService(EPlanSourceType.GENERATE);
+    await expect(
+      service.updateStatus({
+        userId: 'u1',
+        planId: 'plan1',
+        taskId: 'A1',
+        dto: { status: 'DONE' },
+      }),
+    ).rejects.toMatchObject({ code: AppErrorCode.PLAN_SOURCE_NOT_SUPPORTED });
+    expect(tx.task.update).not.toHaveBeenCalled();
+  });
+});
