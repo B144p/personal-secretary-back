@@ -266,14 +266,18 @@ export class PlanService {
     const current = plan.status;
 
     if (to === 'DONE') {
+      // Same rule as the status rollup: a CANCELLED step is finished too,
+      // but a plan where every step was cancelled was not done.
       const leafIds = getLeafIds(plan.tasks);
-      const allDone = plan.tasks
-        .filter((t) => leafIds.has(t.id))
-        .every((t) => t.status === ETaskStatus.DONE);
-      if (!allDone) {
+      const leaves = plan.tasks.filter((t) => leafIds.has(t.id));
+      const allFinished = leaves.every(
+        (t) =>
+          t.status === ETaskStatus.DONE || t.status === ETaskStatus.CANCELLED,
+      );
+      if (!allFinished || !leaves.some((t) => t.status === ETaskStatus.DONE)) {
         throw new AppException(
           AppErrorCode.INVALID_TRANSITION,
-          'All leaf tasks must be DONE before marking plan DONE',
+          'All leaf tasks must be DONE or CANCELLED (at least one DONE) before marking plan DONE',
         );
       }
     }
@@ -295,7 +299,7 @@ export class PlanService {
 
     await this.prisma.plan.update({
       where: { id },
-      data: { status: to as EPlanStatus },
+      data: { status: to as EPlanStatus, last_activity_at: new Date() },
     });
     return { message: `Plan transitioned to ${to}` };
   }
