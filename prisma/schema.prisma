@@ -83,6 +83,8 @@ model Plan {
   status      EPlanStatus
   is_paused   Boolean          @default(false)
   paused_at   DateTime?
+  // Dedupe key for Claude Code imports: "<session_id>:<plan hash>".
+  import_key  String?
 
   created_at DateTime @default(now()) @map("create_at")
   updated_at DateTime @updatedAt @map("update_at")
@@ -91,6 +93,7 @@ model Plan {
   tasks     Task[]
   feedbacks DailyFeedback[]
 
+  @@unique([user_id, import_key])
   @@map("plan")
 }
 
@@ -115,6 +118,8 @@ model Task {
   title             String
   description       String?
   status            ETaskStatus @default(PENDING)
+  // Why the status changed, e.g. the reason a task was CANCELLED.
+  status_note       String?
   depth             Int         @default(0)
   sequence_order    Int         @default(0)
   estimated_minutes Int?
@@ -222,4 +227,5 @@ enum ETaskStatus {
   PENDING
   IN_PROGRESS
   DONE
+  CANCELLED
 }

@@ -1,0 +1,58 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/personal-secretary-back/mcp/hooks/run.sh stash",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/personal-secretary-back/mcp/hooks/run.sh first-edit",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__personal-pm__create_plan",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/personal-secretary-back/mcp/hooks/run.sh create-pre",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/personal-secretary-back/mcp/hooks/run.sh approved",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__personal-pm__create_plan",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/abs/path/to/personal-secretary-back/mcp/hooks/run.sh create-post",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

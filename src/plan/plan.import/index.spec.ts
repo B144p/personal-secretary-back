@@ -1,4 +1,4 @@
-import { EPlanSourceType, EPlanStatus } from '@prisma/client';
+import { EPlanSourceType, EPlanStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import {
   IMPORT_MAX_DEPTH,
@@ -155,5 +155,70 @@ describe('importPlanSchema', () => {
       importPlanSchema.safeParse({ title: 'x', tasks: [{ title: '  ' }] })
         .success,
     ).toBe(false);
+  });
+});
+
+describe('PlanImportService import_key dedupe', () => {
+  const dto = {
+    title: 'CSV export',
+    import_key: 'session1:abc',
+    tasks: [{ title: 'Only step' }],
+  };
+
+  const makeService = (existing: { id: string } | null) => {
+    const planCreate = jest.fn().mockResolvedValue({ id: 'new' });
+    const findUnique = jest.fn(
+      (args: { where: { id?: string }; select?: unknown }) =>
+        Promise.resolve(
+          args.select ? existing : { id: args.where.id, tasks: [] },
+        ),
+    );
+    const tx = {
+      plan: { create: planCreate, findUnique },
+      task: { create: jest.fn().mockResolvedValue({ id: 't1' }) },
+    };
+    const prisma = {
+      plan: { findUnique },
+      $transaction: jest.fn((fn: (t: typeof tx) => unknown) =>
+        fn(tx),
+      ) as jest.Mock,
+    };
+    return {
+      planCreate,
+      prisma,
+      service: new PlanImportService(prisma as unknown as PrismaService),
+    };
+  };
+
+  it('returns the existing plan when the key was already imported', async () => {
+    const { service, planCreate } = makeService({ id: 'existing' });
+    const plan = await service.importPlan('u1', dto);
+    expect(plan).toMatchObject({ id: 'existing' });
+    expect(planCreate).not.toHaveBeenCalled();
+  });
+
+  it('stores the key on a first import', async () => {
+    const { service, planCreate } = makeService(null);
+    await service.importPlan('u1', dto);
+    expect(planCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ import_key: 'session1:abc' }),
+      }),
+    );
+  });
+
+  it('returns the winner when a concurrent import hits the unique key', async () => {
+    const { service, prisma } = makeService(null);
+    prisma.$transaction.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+    prisma.plan.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'winner' });
+    const plan = await service.importPlan('u1', dto);
+    expect(plan).toMatchObject({ id: 'winner' });
   });
 });

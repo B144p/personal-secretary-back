@@ -41,6 +41,9 @@ export const importPlanSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
     source_id: z.string().trim().max(500).optional(),
+    // Set by the plan hook ("<session_id>:<plan hash>"). Re-sending the same
+    // key returns the existing plan instead of creating a duplicate.
+    import_key: z.string().trim().min(1).max(200).optional(),
     tasks: z.array(importTaskNodeSchema).min(1),
   })
   .superRefine((plan, ctx) => {

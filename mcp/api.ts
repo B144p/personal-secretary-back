@@ -14,12 +14,14 @@ export class ApiError extends Error {
 export const createApi = ({
   baseUrl,
   token,
+  timeoutMs = 30_000,
 }: {
   baseUrl: string;
   token: string;
+  timeoutMs?: number;
 }) => {
   const request = async <T>(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'PATCH',
     path: string,
     body?: unknown,
   ): Promise<T> => {
@@ -32,7 +34,7 @@ export const createApi = ({
           ...(body !== undefined && { 'Content-Type': 'application/json' }),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       throw new ApiError(
@@ -59,6 +61,7 @@ export const createApi = ({
   return {
     get: <T>(path: string) => request<T>('GET', path),
     post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
+    patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   };
 };
 

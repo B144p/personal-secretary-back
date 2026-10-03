@@ -6,6 +6,7 @@ import { PlanController, PlanProgressController } from './plan.controller';
 import { GeneratePlanService } from './plan.generate';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
+import { PlanTaskStatusService } from './plan.status';
 import { UpdateProgressService } from './update.progress';
 
 @Module({
@@ -16,6 +17,7 @@ import { UpdateProgressService } from './update.progress';
     CalendarScheduleService,
     GeneratePlanService,
     PlanImportService,
+    PlanTaskStatusService,
     UpdateProgressService,
   ],
 })
