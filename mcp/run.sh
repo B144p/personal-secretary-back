@@ -15,6 +15,9 @@ if [ ! -x "$TSX" ]; then
   exit 1
 fi
 
+# Claude Code starts the server in the session's directory; remember it for
+# get_repo_context before moving to the repo root.
+export PM_SESSION_CWD="${PM_SESSION_CWD:-$PWD}"
 cd "$ROOT" || exit 1
 
 if [ -f "$MCP_DIR/.env" ]; then

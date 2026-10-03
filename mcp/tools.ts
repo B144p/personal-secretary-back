@@ -10,6 +10,7 @@ import {
 } from '../src/plan/dto/import-plan.dto';
 import { TASK_STATUS_UPDATES } from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
+import { repoInfo } from './git';
 
 // Connect, read, create, and report progress. There is intentionally no tool
 // that generates (OpenAI) or schedules (Google Calendar) a plan.
@@ -284,6 +285,37 @@ export const registerTools = (server: McpServer, api: Api) => {
         return text(
           `Added task "${task.title}" (id ${task.id}). ${planSummary(plan)}`,
         );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_repo_context',
+    {
+      title: 'Get repo context',
+      description:
+        'What is in progress in the current repo: the open plan to resume (preferring the current branch), its open steps with ids, cancelled steps with their reasons, and how many other open plans exist. The same block is shown at session start.',
+      inputSchema: {
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "The session's working directory (inside the repo). Defaults to the directory Claude Code started the server in.",
+          ),
+      },
+    },
+    async ({ cwd }) => {
+      try {
+        const info = repoInfo(
+          cwd ?? process.env.PM_SESSION_CWD ?? process.cwd(),
+        );
+        if (!info.repo_key) return text('Not inside a git repository.');
+        const query = new URLSearchParams({ repo_key: info.repo_key });
+        if (info.branch) query.set('branch', info.branch);
+        const ctx = await api.get<{ text: string }>(`/context?${query}`);
+        return text(ctx.text);
       } catch (err) {
         return fail(err);
       }
