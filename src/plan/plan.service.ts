@@ -11,6 +11,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
 import { IGetDetailProps, IGetListProps, IRemovePlanProps } from './interfaces';
+import { normalizeRepoKey } from './repo-key';
 import { GeneratePlanService } from './plan.generate';
 import { lockPlanRow, ROLLUP_TX_OPTIONS } from './plan.status/lock';
 import { rollupTaskStatus } from './plan.status/rollup';
@@ -32,10 +33,20 @@ export class PlanService {
     return await this.generatePlanService.generatePlan(data);
   }
 
-  async getList({ userId }: IGetListProps) {
+  async getList({ userId, query = {} }: IGetListProps) {
     const user = await this.userService.getProfile(userId);
     const plans = await this.prisma.plan.findMany({
-      where: { user_id: user.id },
+      where: {
+        user_id: user.id,
+        ...(query.repo_key && { repo_key: normalizeRepoKey(query.repo_key) }),
+        ...(query.open && { status: { not: EPlanStatus.DONE } }),
+        // Plans from before source_type existed are GENERATE (see below).
+        ...(query.source_type &&
+          (query.source_type === 'GENERATE'
+            ? { OR: [{ source_type: 'GENERATE' }, { source_type: null }] }
+            : { source_type: query.source_type })),
+      },
+      orderBy: { last_activity_at: 'desc' },
       include: {
         tasks: {
           include: { events: { where: { is_active: true } } },

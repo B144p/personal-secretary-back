@@ -44,6 +44,10 @@ export interface PlanOut {
   status: string;
   source_type: string;
   source_id: string | null;
+  repo_key?: string | null;
+  branch?: string | null;
+  parent_plan_id?: string | null;
+  last_activity_at?: string;
   created_at: string;
   tasks: TaskOut[];
 }
@@ -97,29 +101,45 @@ export const registerTools = (server: McpServer, api: Api) => {
     {
       title: 'List plans',
       description:
-        "List the user's plans in Personal Secretary (id, title, status, source, task count). Optionally only plans created from Claude Code.",
+        "List the user's plans in Personal Secretary, most recently active first (id, title, status, source, repo, branch, task count). Filter by repo and to open (not DONE) plans to see what is still in progress in a repo.",
       inputSchema: {
         only_claude_code: z
           .boolean()
           .optional()
           .describe('Only include plans created from Claude Code'),
+        repo_key: z
+          .string()
+          .optional()
+          .describe(
+            'Only plans of this repo: its git origin URL (any form) or repo root path',
+          ),
+        open_only: z
+          .boolean()
+          .optional()
+          .describe('Only plans that are not DONE'),
       },
     },
-    async ({ only_claude_code }) => {
+    async ({ only_claude_code, repo_key, open_only }) => {
       try {
-        const plans = await api.get<PlanOut[]>('/plan');
+        const query = new URLSearchParams();
+        if (only_claude_code) query.set('source_type', 'CLAUDE_CODE');
+        if (repo_key) query.set('repo_key', repo_key);
+        if (open_only) query.set('open', 'true');
+        const qs = query.toString();
+        const plans = await api.get<PlanOut[]>(`/plan${qs ? `?${qs}` : ''}`);
         return text(
-          plans
-            .filter((p) => !only_claude_code || p.source_type === 'CLAUDE_CODE')
-            .map((p) => ({
-              id: p.id,
-              title: p.title,
-              status: p.status,
-              source_type: p.source_type,
-              source_id: p.source_id,
-              tasks: countTasks(p.tasks),
-              created_at: p.created_at,
-            })),
+          plans.map((p) => ({
+            id: p.id,
+            title: p.title,
+            status: p.status,
+            source_type: p.source_type,
+            repo_key: p.repo_key ?? p.source_id,
+            branch: p.branch ?? null,
+            parent_plan_id: p.parent_plan_id ?? null,
+            tasks: countTasks(p.tasks),
+            last_activity_at: p.last_activity_at,
+            created_at: p.created_at,
+          })),
         );
       } catch (err) {
         return fail(err);

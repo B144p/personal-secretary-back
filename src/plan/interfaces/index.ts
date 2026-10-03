@@ -1,11 +1,12 @@
 import { EPlanStatus } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
+import type { ListPlansQuery } from '../dto/list-plans.dto';
 
 interface IUserReq {
   userId: string;
 }
 
-export type IGetListProps = IUserReq & {};
+export type IGetListProps = IUserReq & { query?: ListPlansQuery };
 
 export interface IGetDetailProps extends IUserReq {
   id: string;
