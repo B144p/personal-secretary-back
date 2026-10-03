@@ -7,6 +7,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { Request } from 'express';
 import { AdminModule } from './admin/admin.module';
+import { ContextModule } from './context/context.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -55,6 +56,7 @@ import { IJwtSignData } from './utils';
     GoogleModule,
     UserModule,
     PlanModule,
+    ContextModule,
     TaskModule,
   ],
   controllers: [AppController],
