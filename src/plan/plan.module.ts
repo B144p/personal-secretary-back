@@ -7,6 +7,7 @@ import { GeneratePlanService } from './plan.generate';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
 import { PlanTaskStatusService } from './plan.status';
+import { StalePlansCron } from './stale-plans.cron';
 import { UpdateProgressService } from './update.progress';
 
 @Module({
@@ -19,6 +20,7 @@ import { UpdateProgressService } from './update.progress';
     PlanImportService,
     PlanTaskStatusService,
     UpdateProgressService,
+    StalePlansCron,
   ],
 })
 export class PlanModule {}

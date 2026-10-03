@@ -82,7 +82,8 @@ Details:
 - A `Parent plan: <plan id>` line in the plan links a follow-up plan to the
   earlier one; it is not turned into a task.
 - Plans idle for 14 days are left out of the session-start block (it says how
-  many).
+  many); a daily job (03:00) puts Claude Code plans idle for 30 days on HOLD.
+  Moving a plan back to READY resumes it.
   `import_key` is `<session_id>:<plan hash>`, so a retry never duplicates a
   plan, and a new plan in the same session creates a new one.
 - Hooks never block Claude. Failures go to `~/.claude/personal-pm/hook.log`
