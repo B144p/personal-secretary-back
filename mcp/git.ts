@@ -39,3 +39,11 @@ export const repoInfo = (cwd: string): RepoInfo => {
     branch: head && head !== 'HEAD' ? head : null,
   };
 };
+
+// The import fields for a plan made in this repo; undefined keys are dropped
+// by JSON, so a session outside git only sends source_id.
+export const sessionRepo = (info: RepoInfo) => ({
+  source_id: info.source_id,
+  repo_key: info.repo_key ?? undefined,
+  branch: info.branch ?? undefined,
+});

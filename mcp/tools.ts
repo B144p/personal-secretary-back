@@ -10,7 +10,7 @@ import {
 } from '../src/plan/dto/import-plan.dto';
 import { TASK_STATUS_UPDATES } from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
-import { repoInfo } from './git';
+import { repoInfo, sessionRepo } from './git';
 
 // Connect, read, create, and report progress. There is intentionally no tool
 // that generates (OpenAI) or schedules (Google Calendar) a plan.
@@ -168,8 +168,12 @@ export const registerTools = (server: McpServer, api: Api) => {
           .string()
           .optional()
           .describe(
-            'Where the plan was written: the git origin URL of the repo, or its absolute path',
+            'Where the plan was written: the git origin URL of the repo, or its absolute path. Defaults to the session repo (with its branch).',
           ),
+        parent_plan_id: z
+          .string()
+          .optional()
+          .describe('Id of the earlier plan this one follows up on, if any'),
         tasks: z
           .array(importTaskNodeSchema)
           .describe('Ordered steps; each may have children (sub-steps)'),
@@ -187,7 +191,14 @@ export const registerTools = (server: McpServer, api: Api) => {
         };
       }
       try {
-        const plan = await api.post<PlanOut>('/plan/import', parsed.data);
+        // No source given: the plan belongs to the repo of this session.
+        const where = parsed.data.source_id
+          ? {}
+          : sessionRepo(repoInfo(process.env.PM_SESSION_CWD ?? process.cwd()));
+        const plan = await api.post<PlanOut>('/plan/import', {
+          ...parsed.data,
+          ...where,
+        });
         return text(`Created. ${planSummary(plan)}`);
       } catch (err) {
         return fail(err);

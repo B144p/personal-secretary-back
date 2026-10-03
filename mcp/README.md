@@ -8,11 +8,12 @@ Prisma, no DB connection.
 | Tool | What it does | Backend |
 |---|---|---|
 | `whoami` | Checks the connection and which account the token belongs to | `GET /me` |
-| `list_plans` | Lists plans (optionally only Claude Code ones) | `GET /plan` |
-| `create_plan` | Saves a plan-mode plan as a DRAFT plan with nested tasks | `POST /plan/import` |
+| `list_plans` | Lists plans, most recently active first; filters: Claude Code only, `repo_key`, open only | `GET /plan?source_type=&repo_key=&open=` |
+| `create_plan` | Saves a plan-mode plan as a DRAFT plan with nested tasks, tagged with the session's repo and branch (optional `parent_plan_id`) | `POST /plan/import` |
 | `get_plan` | One plan's task tree with ids, statuses and notes | `GET /plan/:id` |
 | `update_task_status` | PENDING / IN_PROGRESS / DONE / CANCELLED (reason required) | `PATCH /plan/:id/tasks/:taskId/status` |
 | `add_task` | Adds a step found mid-work, with the reason | `POST /plan/:id/tasks` |
+| `get_repo_context` | The open plan of the session's repo: open steps, cancelled reasons, other open plans | `GET /context?repo_key=&branch=` |
 
 Plans created this way are tagged `CLAUDE_CODE`. They **never call OpenAI and
 never book calendar events**; the backend also rejects `re_generate` and
@@ -67,6 +68,7 @@ to remember:
 | You press ESC (or switch model/mode), then say go | `PreToolUse` `Edit\|Write\|MultiEdit\|NotebookEdit` → `first-edit` | Pending plan is sent before the first edit |
 | Claude calls `create_plan` anyway | `PreToolUse`/`PostToolUse` `create_plan` | Denied if it repeats the saved plan (same title, or within 15 minutes of the save); a different plan goes through. On the ESC path Claude's list is used and the hook won't send again |
 | "No, keep planning" | – | Claude revises the plan file (plan-mode edits never trigger a send); the next submission replaces the pending plan |
+| A session starts, resumes, clears or compacts | `SessionStart` → `session-start` | The open plan of this repo (same branch first, else the most recently active) is added to Claude's context in at most 15 lines. Nothing is shown outside git or when no plan is open |
 
 Details:
 
@@ -74,6 +76,13 @@ Details:
   sections become tasks, numbered steps become sub-tasks, and bullets become
   descriptions. Context and Verification sections are skipped.
 - `source_id` is the repo's git origin URL (or repo root, or cwd).
+  `repo_key` is the same remote normalized (`git@github.com:a/b.git` and
+  `https://github.com/a/b` both become `github.com/a/b`, see
+  `src/plan/repo-key.ts`), and `branch` is the current branch.
+- A `Parent plan: <plan id>` line in the plan links a follow-up plan to the
+  earlier one; it is not turned into a task.
+- Plans idle for 14 days are left out of the session-start block (it says how
+  many).
   `import_key` is `<session_id>:<plan hash>`, so a retry never duplicates a
   plan, and a new plan in the same session creates a new one.
 - Hooks never block Claude. Failures go to `~/.claude/personal-pm/hook.log`
@@ -113,7 +122,7 @@ To skip the first-use permission prompt for these tools, add to
 `~/.claude/settings.json`:
 
 ```json
-{ "permissions": { "allow": ["mcp__personal-pm__get_plan", "mcp__personal-pm__update_task_status", "mcp__personal-pm__add_task", "mcp__personal-pm__create_plan"] } }
+{ "permissions": { "allow": ["mcp__personal-pm__get_plan", "mcp__personal-pm__update_task_status", "mcp__personal-pm__add_task", "mcp__personal-pm__create_plan", "mcp__personal-pm__list_plans", "mcp__personal-pm__get_repo_context"] } }
 ```
 
 ## Development
