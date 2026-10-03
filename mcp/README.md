@@ -117,6 +117,9 @@ While implementing, call personal-pm update_task_status: IN_PROGRESS when
 you start a step, DONE when it is finished, CANCELLED with the reason as
 note when a step turns out unnecessary. Use add_task for new steps you
 discover.
+When a plan follows up on an earlier one, add a line "Parent plan: <id>"
+to it. A "Personal PM: open plan in this repo" block at session start is
+the plan to resume; get_repo_context shows it again on demand.
 ```
 
 To skip the first-use permission prompt for these tools, add to
