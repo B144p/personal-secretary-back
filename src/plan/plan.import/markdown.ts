@@ -269,5 +269,9 @@ export const parsePlanMarkdown = (source: string): ParsedMarkdownPlan => {
     );
   }
   if (tasks.length === 0) tasks = [{ title }];
-  return { title, tasks, ...(parentPlanId && { parent_plan_id: parentPlanId }) };
+  return {
+    title,
+    tasks,
+    ...(parentPlanId && { parent_plan_id: parentPlanId }),
+  };
 };
