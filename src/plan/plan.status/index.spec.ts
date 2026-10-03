@@ -64,7 +64,10 @@ describe('PlanTaskStatusService', () => {
     });
     expect(tx.plan.update).toHaveBeenCalledWith({
       where: { id: 'plan1' },
-      data: { status: EPlanStatus.DONE },
+      data: {
+        status: EPlanStatus.DONE,
+        last_activity_at: expect.any(Date),
+      },
     });
     expect(tx.taskEvent.create).not.toHaveBeenCalled();
     expect(tx.taskEvent.createMany).not.toHaveBeenCalled();

@@ -437,8 +437,14 @@ export class PlanService {
       depth,
       sequence_order: finalSequenceOrder,
     };
-    if (!isClaudeCode || plan.status === EPlanStatus.DRAFT) {
-      return this.prisma.task.create({ data });
+    if (!isClaudeCode) return this.prisma.task.create({ data });
+    if (plan.status === EPlanStatus.DRAFT) {
+      const task = await this.prisma.task.create({ data });
+      await this.prisma.plan.update({
+        where: { id: planId },
+        data: { last_activity_at: new Date() },
+      });
+      return task;
     }
 
     // New open work reopens closed ancestors and a finished Claude Code plan.
@@ -464,12 +470,10 @@ export class PlanService {
       for (const [id, status] of rollup.tasks) {
         await tx.task.update({ where: { id }, data: { status } });
       }
-      if (rollup.plan !== locked.status) {
-        await tx.plan.update({
-          where: { id: planId },
-          data: { status: rollup.plan },
-        });
-      }
+      await tx.plan.update({
+        where: { id: planId },
+        data: { status: rollup.plan, last_activity_at: new Date() },
+      });
       return task;
     }, ROLLUP_TX_OPTIONS);
   }

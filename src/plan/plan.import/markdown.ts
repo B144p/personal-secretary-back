@@ -10,6 +10,8 @@
 //   are flattened so their subsections / steps become the tasks instead.
 // - Ordered list items are steps → child tasks. Bullets and paragraphs are
 //   details → the task description.
+// - A "Parent plan: <uuid>" line links a follow-up plan to the earlier one.
+//   It is metadata, so it is removed before the tasks are built.
 
 export const MARKDOWN_MAX_DEPTH = 4; // depth 0..4, matches IMPORT_MAX_DEPTH
 export const MARKDOWN_MAX_TASKS = 100; // matches IMPORT_MAX_TASKS
@@ -25,7 +27,25 @@ export interface MarkdownTask {
 export interface ParsedMarkdownPlan {
   title: string;
   tasks: MarkdownTask[];
+  parent_plan_id?: string;
 }
+
+// "Parent plan: <uuid>", optionally as a bullet, bold or in backticks.
+const PARENT_PLAN_LINE =
+  /^\s*(?:[-*+]\s+)?(?:\*\*|__)?parent plan(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`?.*$/i;
+
+const takeParentPlan = (markdown: string) => {
+  let parentPlanId: string | undefined;
+  let inFence = false;
+  const lines = markdown.split('\n').filter((line) => {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    const m = !inFence && PARENT_PLAN_LINE.exec(line);
+    if (!m) return true;
+    parentPlanId ??= m[1].toLowerCase();
+    return false;
+  });
+  return { markdown: lines.join('\n'), parentPlanId };
+};
 
 // Background sections, matched against the whole heading (plus an optional
 // "(...)" qualifier) so work sections that merely start with one of these
@@ -224,7 +244,10 @@ const limit = (tasks: MarkdownTask[]): MarkdownTask[] => {
   return walk(tasks, 0);
 };
 
-export const parsePlanMarkdown = (markdown: string): ParsedMarkdownPlan => {
+export const parsePlanMarkdown = (source: string): ParsedMarkdownPlan => {
+  const { markdown, parentPlanId } = takeParentPlan(
+    source.replace(/\r\n/g, '\n'),
+  );
   const root = parseSections(markdown);
   const h1 = root.sections.find((s) => s.level === 1);
   const firstLine = markdown.split('\n').find((l) => l.trim()) ?? '';
@@ -246,5 +269,5 @@ export const parsePlanMarkdown = (markdown: string): ParsedMarkdownPlan => {
     );
   }
   if (tasks.length === 0) tasks = [{ title }];
-  return { title, tasks };
+  return { title, tasks, ...(parentPlanId && { parent_plan_id: parentPlanId }) };
 };

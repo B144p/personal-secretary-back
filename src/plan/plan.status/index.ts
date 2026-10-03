@@ -53,12 +53,10 @@ export class PlanTaskStatusService {
       for (const [id, status] of result.tasks) {
         await tx.task.update({ where: { id }, data: { status } });
       }
-      if (result.plan !== plan.status) {
-        await tx.plan.update({
-          where: { id: planId },
-          data: { status: result.plan },
-        });
-      }
+      await tx.plan.update({
+        where: { id: planId },
+        data: { status: result.plan, last_activity_at: new Date() },
+      });
 
       return loadPlanWithTaskTree(tx, planId);
     }, ROLLUP_TX_OPTIONS);

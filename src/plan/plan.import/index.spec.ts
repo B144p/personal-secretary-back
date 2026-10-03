@@ -9,6 +9,7 @@ import { PlanImportService } from './index';
 
 describe('PlanImportService', () => {
   let planCreate: jest.Mock;
+  let planFindFirst: jest.Mock;
   let taskCreate: jest.Mock;
   let taskEventCreate: jest.Mock;
   let taskEventCreateMany: jest.Mock;
@@ -17,6 +18,7 @@ describe('PlanImportService', () => {
   beforeEach(() => {
     let seq = 0;
     planCreate = jest.fn().mockResolvedValue({ id: 'plan1' });
+    planFindFirst = jest.fn().mockResolvedValue({ id: 'parent1' });
     taskCreate = jest
       .fn()
       .mockImplementation(() => Promise.resolve({ id: `task${++seq}` }));
@@ -26,6 +28,7 @@ describe('PlanImportService', () => {
       plan: {
         create: planCreate,
         findUnique: jest.fn().mockResolvedValue({ id: 'plan1', tasks: [] }),
+        findFirst: planFindFirst,
       },
       task: { create: taskCreate },
       taskEvent: { create: taskEventCreate, createMany: taskEventCreateMany },
@@ -54,6 +57,60 @@ describe('PlanImportService', () => {
         }),
       }),
     );
+  });
+
+  it('stores a normalized repo_key, the branch and the parent plan', async () => {
+    const parentId = '65f357f3-d79e-4e8b-bef8-58086469c7e3';
+    await service.importPlan('u1', {
+      title: 'Follow-up',
+      repo_key: 'git@github.com:me/repo.git',
+      branch: 'feat/x',
+      parent_plan_id: parentId,
+      tasks: [{ title: 'Only step' }],
+    });
+
+    expect(planFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: parentId, user_id: 'u1' } }),
+    );
+    expect(planCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          repo_key: 'github.com/me/repo',
+          branch: 'feat/x',
+          parent_plan_id: parentId,
+        }),
+      }),
+    );
+  });
+
+  it('falls back to source_id for repo_key', async () => {
+    await service.importPlan('u1', {
+      title: 'Old client',
+      source_id: 'https://github.com/me/repo.git',
+      tasks: [{ title: 'Only step' }],
+    });
+
+    expect(planCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          repo_key: 'github.com/me/repo',
+          branch: null,
+          parent_plan_id: null,
+        }),
+      }),
+    );
+  });
+
+  it("rejects a parent plan that is not the user's, before creating anything", async () => {
+    planFindFirst.mockResolvedValue(null);
+    await expect(
+      service.importPlan('u1', {
+        title: 'Follow-up',
+        parent_plan_id: '65f357f3-d79e-4e8b-bef8-58086469c7e3',
+        tasks: [{ title: 'Only step' }],
+      }),
+    ).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' });
+    expect(planCreate).not.toHaveBeenCalled();
   });
 
   it('writes the nested tree with correct depth, parent and sequence order', async () => {

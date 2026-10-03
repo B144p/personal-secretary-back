@@ -160,4 +160,40 @@ why
     expect(count).toBe(MARKDOWN_MAX_TASKS);
     expect(importPlanSchema.safeParse(plan).success).toBe(true);
   });
+
+  it('reads a Parent plan line as metadata, not as a task or description', () => {
+    const id = '65f357f3-d79e-4e8b-bef8-58086469c7e3';
+    const plan = parsePlanMarkdown(`# Follow-up
+
+Parent plan: ${id}
+
+## Steps
+1. Do the rest
+`);
+    expect(plan.parent_plan_id).toBe(id);
+    expect(titles(plan.tasks)).toEqual(['Do the rest']);
+    expect(JSON.stringify(plan)).not.toContain('Parent plan');
+  });
+
+  it('accepts a bold or bulleted Parent plan line with backticks', () => {
+    const id = '65F357F3-D79E-4E8B-BEF8-58086469C7E3';
+    expect(
+      parsePlanMarkdown(`# A\n\n- **Parent plan:** \`${id}\`\n\n1. x`)
+        .parent_plan_id,
+    ).toBe(id.toLowerCase());
+  });
+
+  it('ignores a Parent plan line inside a code fence or without a uuid', () => {
+    const plan = parsePlanMarkdown(`# A
+
+\`\`\`
+Parent plan: 65f357f3-d79e-4e8b-bef8-58086469c7e3
+\`\`\`
+
+Parent plan: the earlier one
+
+1. x
+`);
+    expect(plan.parent_plan_id).toBeUndefined();
+  });
 });

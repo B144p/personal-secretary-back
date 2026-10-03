@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, Prisma } from '@prisma/client';
+import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import type { ImportPlanDto, ImportTaskNode } from '../dto/import-plan.dto';
+import { normalizeRepoKey } from '../repo-key';
 import type { ITaskNode } from '../schemas';
 import { insertTaskTree, loadPlanWithTaskTree } from '../task-tree';
 
@@ -45,6 +47,19 @@ export class PlanImportService {
 
     return this.prisma.$transaction(
       async (tx) => {
+        if (dto.parent_plan_id) {
+          const parent = await tx.plan.findFirst({
+            where: { id: dto.parent_plan_id, user_id: userId },
+            select: { id: true },
+          });
+          if (!parent) {
+            throw new AppException(
+              AppErrorCode.PLAN_NOT_FOUND,
+              'Parent plan not found',
+            );
+          }
+        }
+        const repoKey = dto.repo_key ?? dto.source_id;
         const created = await tx.plan.create({
           data: {
             user_id: userId,
@@ -52,6 +67,9 @@ export class PlanImportService {
             source_type: EPlanSourceType.CLAUDE_CODE,
             source_id: dto.source_id ?? null,
             import_key: dto.import_key ?? null,
+            repo_key: repoKey ? normalizeRepoKey(repoKey) : null,
+            branch: dto.branch ?? null,
+            parent_plan_id: dto.parent_plan_id ?? null,
             status: EPlanStatus.DRAFT,
           },
         });

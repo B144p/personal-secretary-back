@@ -80,7 +80,10 @@ describe('PlanService.createTask on active plans', () => {
     });
     expect(prisma.plan.update).toHaveBeenCalledWith({
       where: { id: 'plan1' },
-      data: { status: EPlanStatus.READY },
+      data: {
+        status: EPlanStatus.READY,
+        last_activity_at: expect.any(Date),
+      },
     });
   });
 
