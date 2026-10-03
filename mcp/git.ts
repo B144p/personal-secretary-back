@@ -30,13 +30,14 @@ export interface RepoInfo {
 export const repoInfo = (cwd: string): RepoInfo => {
   const origin = git(cwd, ['remote', 'get-url', 'origin']);
   const root = origin ? null : git(cwd, ['rev-parse', '--show-toplevel']);
-  const head =
-    origin || root ? git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']) : null;
+  // symbolic-ref also names an unborn branch, and fails on a detached HEAD.
+  const branch =
+    origin || root ? git(cwd, ['symbolic-ref', '--short', 'HEAD']) : null;
   const remoteOrRoot = origin ?? root;
   return {
     source_id: remoteOrRoot ?? cwd,
     repo_key: remoteOrRoot ? normalizeRepoKey(remoteOrRoot) : null,
-    branch: head && head !== 'HEAD' ? head : null,
+    branch,
   };
 };
 
