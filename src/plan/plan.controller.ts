@@ -28,6 +28,7 @@ import { updateTaskStatusSchema } from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
 import { PlanTaskStatusService } from './plan.status';
+import { ProgressService } from './progress/progress.service';
 import { UpdateProgressService } from './update.progress';
 
 @Controller('plan')
@@ -37,6 +38,7 @@ export class PlanController {
     private readonly planService: PlanService,
     private readonly planImportService: PlanImportService,
     private readonly planTaskStatusService: PlanTaskStatusService,
+    private readonly progressService: ProgressService,
   ) {}
 
   // Plan written by Claude Code in plan mode — no OpenAI, no calendar.
@@ -73,6 +75,12 @@ export class PlanController {
       userId: validateJwtPayload(req.user).sub,
       query: parsed.data,
     });
+  }
+
+  // How one plan is going (agents, get_progress).
+  @Get(':id/progress')
+  async getProgress(@Req() req: Request, @Param('id') id: string) {
+    return await this.progressService.one(validateJwtPayload(req.user).sub, id);
   }
 
   @Get(':id')
