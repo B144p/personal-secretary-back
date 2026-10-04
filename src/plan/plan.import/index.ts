@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EPlanSourceType, EPlanStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import type { ImportPlanDto, ImportTaskNode } from '../dto/import-plan.dto';
+import { normalizeRepoKey } from '../repo-key';
 import type { ITaskNode } from '../schemas';
 import { insertTaskTree, loadPlanWithTaskTree } from '../task-tree';
 
@@ -12,6 +13,8 @@ import { insertTaskTree, loadPlanWithTaskTree } from '../task-tree';
 // See source-guard.ts for the matching block on re_generate/schedule.
 @Injectable()
 export class PlanImportService {
+  private readonly logger = new Logger(PlanImportService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async importPlan(userId: string, dto: ImportPlanDto) {
@@ -45,6 +48,22 @@ export class PlanImportService {
 
     return this.prisma.$transaction(
       async (tx) => {
+        // The link is only metadata: a parent that was deleted, lives in the
+        // other backend (dev vs prod) or isn't the user's is dropped, never
+        // a reason to lose the plan itself.
+        let parentPlanId: string | null = null;
+        if (dto.parent_plan_id) {
+          const parent = await tx.plan.findFirst({
+            where: { id: dto.parent_plan_id, user_id: userId },
+            select: { id: true },
+          });
+          if (parent) parentPlanId = parent.id;
+          else
+            this.logger.warn(
+              `Parent plan ${dto.parent_plan_id} not found for user ${userId}; importing without the link`,
+            );
+        }
+        const repoKey = dto.repo_key ?? dto.source_id;
         const created = await tx.plan.create({
           data: {
             user_id: userId,
@@ -52,6 +71,9 @@ export class PlanImportService {
             source_type: EPlanSourceType.CLAUDE_CODE,
             source_id: dto.source_id ?? null,
             import_key: dto.import_key ?? null,
+            repo_key: repoKey ? normalizeRepoKey(repoKey) : null,
+            branch: dto.branch ?? null,
+            parent_plan_id: parentPlanId,
             status: EPlanStatus.DRAFT,
           },
         });

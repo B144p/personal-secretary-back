@@ -17,7 +17,7 @@ if (!baseUrl || !token) {
   process.exit(1);
 }
 
-const server = new McpServer({ name: 'personal-pm', version: '0.2.0' });
+const server = new McpServer({ name: 'personal-pm', version: '0.3.0' });
 registerTools(server, createApi({ baseUrl, token }));
 
 server

@@ -44,6 +44,12 @@ export const importPlanSchema = z
     // Set by the plan hook ("<session_id>:<plan hash>"). Re-sending the same
     // key returns the existing plan instead of creating a duplicate.
     import_key: z.string().trim().min(1).max(200).optional(),
+    // Where the plan was made: normalized git origin URL (else repo root path)
+    // and the branch. When repo_key is missing, source_id is used instead.
+    repo_key: z.string().trim().min(1).max(500).optional(),
+    branch: z.string().trim().min(1).max(200).optional(),
+    // The earlier plan this one follows up on (same user).
+    parent_plan_id: z.string().uuid().optional(),
     tasks: z.array(importTaskNodeSchema).min(1),
   })
   .superRefine((plan, ctx) => {

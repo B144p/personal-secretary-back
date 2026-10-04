@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { generatePlanSchema } from './dto/generate-plan.dto';
 import { importPlanSchema } from './dto/import-plan.dto';
+import { listPlansQuerySchema } from './dto/list-plans.dto';
 import { reGeneratePlanSchema } from './dto/re-generate-plan.dto';
 import { updateTaskStatusSchema } from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
@@ -61,9 +63,13 @@ export class PlanController {
   }
 
   @Get()
-  async getList(@Req() req: Request) {
+  async getList(@Req() req: Request, @Query() query: unknown) {
+    const parsed = listPlansQuerySchema.safeParse(query);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
     return await this.planService.getList({
       userId: validateJwtPayload(req.user).sub,
+      query: parsed.data,
     });
   }
 

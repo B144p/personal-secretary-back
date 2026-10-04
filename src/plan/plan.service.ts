@@ -11,9 +11,10 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { UserService } from 'src/user/user.service';
 import { CalendarScheduleService } from './calendar.schedule';
 import { IGetDetailProps, IGetListProps, IRemovePlanProps } from './interfaces';
+import { normalizeRepoKey } from './repo-key';
 import { GeneratePlanService } from './plan.generate';
 import { lockPlanRow, ROLLUP_TX_OPTIONS } from './plan.status/lock';
-import { rollupTaskStatus } from './plan.status/rollup';
+import { activePlanStatus, rollupTaskStatus } from './plan.status/rollup';
 import { assertNotClaudeCodePlan } from './source-guard';
 
 @Injectable()
@@ -32,10 +33,20 @@ export class PlanService {
     return await this.generatePlanService.generatePlan(data);
   }
 
-  async getList({ userId }: IGetListProps) {
+  async getList({ userId, query = {} }: IGetListProps) {
     const user = await this.userService.getProfile(userId);
     const plans = await this.prisma.plan.findMany({
-      where: { user_id: user.id },
+      where: {
+        user_id: user.id,
+        ...(query.repo_key && { repo_key: normalizeRepoKey(query.repo_key) }),
+        ...(query.open && { status: { not: EPlanStatus.DONE } }),
+        // Plans from before source_type existed are GENERATE (see below).
+        ...(query.source_type &&
+          (query.source_type === 'GENERATE'
+            ? { OR: [{ source_type: 'GENERATE' }, { source_type: null }] }
+            : { source_type: query.source_type })),
+      },
+      orderBy: { last_activity_at: 'desc' },
       include: {
         tasks: {
           include: { events: { where: { is_active: true } } },
@@ -255,14 +266,18 @@ export class PlanService {
     const current = plan.status;
 
     if (to === 'DONE') {
+      // Same rule as the status rollup: a CANCELLED step is finished too,
+      // but a plan where every step was cancelled was not done.
       const leafIds = getLeafIds(plan.tasks);
-      const allDone = plan.tasks
-        .filter((t) => leafIds.has(t.id))
-        .every((t) => t.status === ETaskStatus.DONE);
-      if (!allDone) {
+      const leaves = plan.tasks.filter((t) => leafIds.has(t.id));
+      const allFinished = leaves.every(
+        (t) =>
+          t.status === ETaskStatus.DONE || t.status === ETaskStatus.CANCELLED,
+      );
+      if (!allFinished || !leaves.some((t) => t.status === ETaskStatus.DONE)) {
         throw new AppException(
           AppErrorCode.INVALID_TRANSITION,
-          'All leaf tasks must be DONE before marking plan DONE',
+          'All leaf tasks must be DONE or CANCELLED (at least one DONE) before marking plan DONE',
         );
       }
     }
@@ -284,7 +299,7 @@ export class PlanService {
 
     await this.prisma.plan.update({
       where: { id },
-      data: { status: to as EPlanStatus },
+      data: { status: to as EPlanStatus, last_activity_at: new Date() },
     });
     return { message: `Plan transitioned to ${to}` };
   }
@@ -437,8 +452,14 @@ export class PlanService {
       depth,
       sequence_order: finalSequenceOrder,
     };
-    if (!isClaudeCode || plan.status === EPlanStatus.DRAFT) {
-      return this.prisma.task.create({ data });
+    if (!isClaudeCode) return this.prisma.task.create({ data });
+    if (plan.status === EPlanStatus.DRAFT) {
+      const task = await this.prisma.task.create({ data });
+      await this.prisma.plan.update({
+        where: { id: planId },
+        data: { last_activity_at: new Date() },
+      });
+      return task;
     }
 
     // New open work reopens closed ancestors and a finished Claude Code plan.
@@ -448,7 +469,7 @@ export class PlanService {
       await lockPlanRow(tx, planId);
       const locked = await tx.plan.findUniqueOrThrow({
         where: { id: planId },
-        select: { status: true },
+        select: { status: true, is_paused: true },
       });
       const task = await tx.task.create({ data });
       const tasks = await tx.task.findMany({
@@ -459,17 +480,15 @@ export class PlanService {
         tasks,
         changedId: task.id,
         newStatus: task.status,
-        planStatus: locked.status,
+        planStatus: activePlanStatus(locked.status, locked.is_paused),
       });
       for (const [id, status] of rollup.tasks) {
         await tx.task.update({ where: { id }, data: { status } });
       }
-      if (rollup.plan !== locked.status) {
-        await tx.plan.update({
-          where: { id: planId },
-          data: { status: rollup.plan },
-        });
-      }
+      await tx.plan.update({
+        where: { id: planId },
+        data: { status: rollup.plan, last_activity_at: new Date() },
+      });
       return task;
     }, ROLLUP_TX_OPTIONS);
   }
@@ -509,9 +528,11 @@ export class PlanService {
 
 const MAX_TASK_DEPTH = 4;
 
+// HOLD: a stale Claude Code plan; adding work picks it up again (READY).
 const CLAUDE_CODE_TASK_ADD_STATUSES: EPlanStatus[] = [
   EPlanStatus.DRAFT,
   EPlanStatus.READY,
+  EPlanStatus.HOLD,
   EPlanStatus.DONE,
 ];
 

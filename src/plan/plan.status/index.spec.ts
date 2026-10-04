@@ -64,11 +64,43 @@ describe('PlanTaskStatusService', () => {
     });
     expect(tx.plan.update).toHaveBeenCalledWith({
       where: { id: 'plan1' },
-      data: { status: EPlanStatus.DONE },
+      data: {
+        status: EPlanStatus.DONE,
+        last_activity_at: expect.any(Date),
+      },
     });
     expect(tx.taskEvent.create).not.toHaveBeenCalled();
     expect(tx.taskEvent.createMany).not.toHaveBeenCalled();
     expect(tx.taskEvent.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('picks a stale HOLD plan up again: a step update moves it to READY', async () => {
+    const { tx, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+    tx.plan.findUnique.mockReset();
+    tx.plan.findUnique
+      .mockResolvedValueOnce({
+        id: 'plan1',
+        source_type: EPlanSourceType.CLAUDE_CODE,
+        status: EPlanStatus.HOLD,
+        is_paused: false,
+        tasks: [
+          { id: 'A', parent_task_id: null, status: ETaskStatus.PENDING },
+          { id: 'B', parent_task_id: null, status: ETaskStatus.PENDING },
+        ],
+      })
+      .mockResolvedValue({ id: 'plan1', tasks: [] });
+
+    await service.updateStatus({
+      userId: 'u1',
+      planId: 'plan1',
+      taskId: 'A',
+      dto: { status: 'IN_PROGRESS' },
+    });
+
+    expect(tx.plan.update).toHaveBeenCalledWith({
+      where: { id: 'plan1' },
+      data: { status: EPlanStatus.READY, last_activity_at: expect.any(Date) },
+    });
   });
 
   it('locks the plan row before reading the task tree', async () => {

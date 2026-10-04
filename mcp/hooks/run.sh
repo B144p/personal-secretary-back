@@ -1,6 +1,6 @@
 #!/bin/sh
 # Launcher for the personal-pm plan hooks (see index.ts for the events).
-#   /abs/path/to/mcp/hooks/run.sh <stash|approved|first-edit|create-pre|create-post>
+#   /abs/path/to/mcp/hooks/run.sh <stash|approved|first-edit|create-pre|create-post|session-start>
 #
 # Loads PM_API_URL / PM_TOKEN from mcp/.env like mcp/run.sh. Always exits 0
 # so a broken hook never blocks Claude Code.

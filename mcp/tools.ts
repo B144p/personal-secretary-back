@@ -10,6 +10,7 @@ import {
 } from '../src/plan/dto/import-plan.dto';
 import { TASK_STATUS_UPDATES } from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
+import { repoInfo, sessionRepo } from './git';
 
 // Connect, read, create, and report progress. There is intentionally no tool
 // that generates (OpenAI) or schedules (Google Calendar) a plan.
@@ -44,6 +45,10 @@ export interface PlanOut {
   status: string;
   source_type: string;
   source_id: string | null;
+  repo_key?: string | null;
+  branch?: string | null;
+  parent_plan_id?: string | null;
+  last_activity_at?: string;
   created_at: string;
   tasks: TaskOut[];
 }
@@ -97,29 +102,45 @@ export const registerTools = (server: McpServer, api: Api) => {
     {
       title: 'List plans',
       description:
-        "List the user's plans in Personal Secretary (id, title, status, source, task count). Optionally only plans created from Claude Code.",
+        "List the user's plans in Personal Secretary, most recently active first (id, title, status, source, repo, branch, task count). Filter by repo and to open (not DONE) plans to see what is still in progress in a repo.",
       inputSchema: {
         only_claude_code: z
           .boolean()
           .optional()
           .describe('Only include plans created from Claude Code'),
+        repo_key: z
+          .string()
+          .optional()
+          .describe(
+            'Only plans of this repo: its git origin URL (any form) or repo root path',
+          ),
+        open_only: z
+          .boolean()
+          .optional()
+          .describe('Only plans that are not DONE'),
       },
     },
-    async ({ only_claude_code }) => {
+    async ({ only_claude_code, repo_key, open_only }) => {
       try {
-        const plans = await api.get<PlanOut[]>('/plan');
+        const query = new URLSearchParams();
+        if (only_claude_code) query.set('source_type', 'CLAUDE_CODE');
+        if (repo_key) query.set('repo_key', repo_key);
+        if (open_only) query.set('open', 'true');
+        const qs = query.toString();
+        const plans = await api.get<PlanOut[]>(`/plan${qs ? `?${qs}` : ''}`);
         return text(
-          plans
-            .filter((p) => !only_claude_code || p.source_type === 'CLAUDE_CODE')
-            .map((p) => ({
-              id: p.id,
-              title: p.title,
-              status: p.status,
-              source_type: p.source_type,
-              source_id: p.source_id,
-              tasks: countTasks(p.tasks),
-              created_at: p.created_at,
-            })),
+          plans.map((p) => ({
+            id: p.id,
+            title: p.title,
+            status: p.status,
+            source_type: p.source_type,
+            repo_key: p.repo_key ?? p.source_id,
+            branch: p.branch ?? null,
+            parent_plan_id: p.parent_plan_id ?? null,
+            tasks: countTasks(p.tasks),
+            last_activity_at: p.last_activity_at,
+            created_at: p.created_at,
+          })),
         );
       } catch (err) {
         return fail(err);
@@ -147,8 +168,12 @@ export const registerTools = (server: McpServer, api: Api) => {
           .string()
           .optional()
           .describe(
-            'Where the plan was written: the git origin URL of the repo, or its absolute path',
+            'Where the plan was written: the git origin URL of the repo, or its absolute path. Defaults to the session repo (with its branch).',
           ),
+        parent_plan_id: z
+          .string()
+          .optional()
+          .describe('Id of the earlier plan this one follows up on, if any'),
         tasks: z
           .array(importTaskNodeSchema)
           .describe('Ordered steps; each may have children (sub-steps)'),
@@ -166,7 +191,14 @@ export const registerTools = (server: McpServer, api: Api) => {
         };
       }
       try {
-        const plan = await api.post<PlanOut>('/plan/import', parsed.data);
+        // No source given: the plan belongs to the repo of this session.
+        const where = parsed.data.source_id
+          ? {}
+          : sessionRepo(repoInfo(process.env.PM_SESSION_CWD ?? process.cwd()));
+        const plan = await api.post<PlanOut>('/plan/import', {
+          ...parsed.data,
+          ...where,
+        });
         return text(`Created. ${planSummary(plan)}`);
       } catch (err) {
         return fail(err);
@@ -264,6 +296,37 @@ export const registerTools = (server: McpServer, api: Api) => {
         return text(
           `Added task "${task.title}" (id ${task.id}). ${planSummary(plan)}`,
         );
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'get_repo_context',
+    {
+      title: 'Get repo context',
+      description:
+        'What is in progress in the current repo: the open plan to resume (preferring the current branch), its open steps with ids, cancelled steps with their reasons, and how many other open plans exist. The same block is shown at session start.',
+      inputSchema: {
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "The session's working directory (inside the repo). Defaults to the directory Claude Code started the server in.",
+          ),
+      },
+    },
+    async ({ cwd }) => {
+      try {
+        const info = repoInfo(
+          cwd ?? process.env.PM_SESSION_CWD ?? process.cwd(),
+        );
+        if (!info.repo_key) return text('Not inside a git repository.');
+        const query = new URLSearchParams({ repo_key: info.repo_key });
+        if (info.branch) query.set('branch', info.branch);
+        const ctx = await api.get<{ text: string }>(`/context?${query}`);
+        return text(ctx.text);
       } catch (err) {
         return fail(err);
       }

@@ -85,15 +85,24 @@ model Plan {
   paused_at   DateTime?
   // Dedupe key for Claude Code imports: "<session_id>:<plan hash>".
   import_key  String?
+  // Repo identity for Claude Code plans: normalized origin URL, else repo root path.
+  repo_key       String?
+  branch         String?
+  parent_plan_id String?
+  // Bumped on import, task status change and add_task; drives repo context and stale close.
+  last_activity_at DateTime @default(now())
 
   created_at DateTime @default(now()) @map("create_at")
   updated_at DateTime @updatedAt @map("update_at")
 
-  user      User            @relation(fields: [user_id], references: [id])
-  tasks     Task[]
-  feedbacks DailyFeedback[]
+  user        User            @relation(fields: [user_id], references: [id])
+  parent_plan Plan?           @relation("PlanFollowUps", fields: [parent_plan_id], references: [id], onDelete: SetNull)
+  follow_ups  Plan[]          @relation("PlanFollowUps")
+  tasks       Task[]
+  feedbacks   DailyFeedback[]
 
   @@unique([user_id, import_key])
+  @@index([user_id, repo_key])
   @@map("plan")
 }
 

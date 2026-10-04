@@ -25,7 +25,9 @@ describe('PlanService.createTask on active plans', () => {
       $transaction: jest.fn(),
       plan: {
         findUnique: jest.fn().mockResolvedValue({ id: 'plan1', ...plan }),
-        findUniqueOrThrow: jest.fn().mockResolvedValue({ status: plan.status }),
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValue({ status: plan.status, is_paused: false }),
         update: jest.fn(),
       },
       task: {
@@ -80,7 +82,31 @@ describe('PlanService.createTask on active plans', () => {
     });
     expect(prisma.plan.update).toHaveBeenCalledWith({
       where: { id: 'plan1' },
-      data: { status: EPlanStatus.READY },
+      data: {
+        status: EPlanStatus.READY,
+        last_activity_at: expect.any(Date),
+      },
+    });
+  });
+
+  it('adds a task to a Claude Code plan the stale job put on HOLD and picks it up again', async () => {
+    const { prisma, service } = makeService({
+      source_type: EPlanSourceType.CLAUDE_CODE,
+      status: EPlanStatus.HOLD,
+    });
+    await service.createTask({
+      userId: 'u1',
+      planId: 'plan1',
+      body: { title: 'Pick this up again', parent_task_id: 'A' },
+    });
+
+    expect(prisma.task.create).toHaveBeenCalled();
+    expect(prisma.plan.update).toHaveBeenCalledWith({
+      where: { id: 'plan1' },
+      data: {
+        status: EPlanStatus.READY,
+        last_activity_at: expect.any(Date),
+      },
     });
   });
 

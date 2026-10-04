@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -16,6 +15,7 @@ import { join, resolve, sep } from 'node:path';
 // Both are dependency-free (no Nest, no Prisma), so this stays fast.
 import { parsePlanMarkdown } from '../../src/plan/plan.import/markdown';
 import { createApi } from '../api';
+import { repoInfo, sessionRepo } from '../git';
 import { planSummary, type PlanOut } from '../tools';
 
 // Claude Code hooks that save plan-mode plans to Personal Secretary without
@@ -26,6 +26,7 @@ import { planSummary, type PlanOut } from '../tools';
 //   first-edit  PreToolUse  Edit|Write|…   work started (e.g. after ESC) → send
 //   create-pre  PreToolUse  create_plan    already sent → deny the duplicate
 //   create-post PostToolUse create_plan    Claude saved it → mark as sent
+//   session-start SessionStart              open plan of this repo → context
 //
 // A hook must never get in Claude's way: every failure is logged and the
 // process exits 0. stdout is only used for the JSON Claude Code reads.
@@ -118,7 +119,10 @@ const remove = (path: string) => {
 const hashPlan = (plan: string) =>
   createHash('sha256').update(plan.trim()).digest('hex').slice(0, 16);
 
-const output = (event: 'PreToolUse' | 'PostToolUse', extra: object) =>
+const output = (
+  event: 'PreToolUse' | 'PostToolUse' | 'SessionStart',
+  extra: object,
+) =>
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: { hookEventName: event, ...extra },
@@ -151,26 +155,6 @@ const planFromInput = (input: HookInput): string | null => {
     }
   }
   return null;
-};
-
-// git origin URL → repo root → cwd, as agreed for source_id.
-const sourceIdFor = (cwd: string) => {
-  for (const args of [
-    ['remote', 'get-url', 'origin'],
-    ['rev-parse', '--show-toplevel'],
-  ]) {
-    try {
-      const out = execFileSync('git', ['-C', cwd, ...args], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 3000,
-      }).trim();
-      if (out) return out;
-    } catch {
-      // not a repo / no origin
-    }
-  }
-  return cwd;
 };
 
 const isPlanningEdit = (input: HookInput) => {
@@ -213,11 +197,12 @@ const send = async (sessionId: string, pending: Pending) => {
     log(`skip send ${sessionId}: PM_API_URL / PM_TOKEN not set`);
     return null;
   }
-  const { title, tasks } = parsePlanMarkdown(pending.plan);
+  const { title, tasks, parent_plan_id } = parsePlanMarkdown(pending.plan);
   const api = createApi({ baseUrl, token, timeoutMs: 10_000 });
   const plan = await api.post<PlanOut>('/plan/import', {
     title,
-    source_id: sourceIdFor(pending.cwd),
+    ...sessionRepo(repoInfo(pending.cwd)),
+    parent_plan_id,
     tasks,
     import_key: `${sessionId}:${pending.hash}`,
   });
@@ -242,6 +227,31 @@ const savedContext = (plan: PlanOut) =>
   ].join('\n');
 
 const handlers: Record<string, (input: HookInput) => void | Promise<void>> = {
+  // New, resumed, cleared or compacted session: hand Claude the open plan of
+  // this repo before the first prompt. Quiet outside git, when the repo has no
+  // plans left to mention, and on any error; a slow backend must not hold
+  // the session up.
+  'session-start': async (input) => {
+    const baseUrl = process.env.PM_API_URL;
+    const token = process.env.PM_TOKEN;
+    if (!baseUrl || !token) return;
+    const { repo_key, branch } = repoInfo(input.cwd ?? process.cwd());
+    if (!repo_key) return;
+    const query = new URLSearchParams({ repo_key });
+    if (branch) query.set('branch', branch);
+    const api = createApi({ baseUrl, token, timeoutMs: 3_000 });
+    const ctx = await api.get<{
+      plan: unknown;
+      text: string;
+      stale_count: number;
+      held_count?: number;
+    }>(`/context?${query}`);
+    // Also the one-liner when only idle or held plans exist, so a plan put on
+    // HOLD after 30 days is still mentioned instead of vanishing.
+    if (ctx.plan || ctx.stale_count || ctx.held_count)
+      output('SessionStart', { additionalContext: ctx.text });
+  },
+
   // Plan submitted. Nothing is sent yet: the user may still say "No, keep
   // planning", press ESC, or approve.
   stash: (input) => {
