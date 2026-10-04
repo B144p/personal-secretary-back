@@ -14,7 +14,7 @@ import { IGetDetailProps, IGetListProps, IRemovePlanProps } from './interfaces';
 import { normalizeRepoKey } from './repo-key';
 import { GeneratePlanService } from './plan.generate';
 import { lockPlanRow, ROLLUP_TX_OPTIONS } from './plan.status/lock';
-import { rollupTaskStatus } from './plan.status/rollup';
+import { activePlanStatus, rollupTaskStatus } from './plan.status/rollup';
 import { assertNotClaudeCodePlan } from './source-guard';
 
 @Injectable()
@@ -469,7 +469,7 @@ export class PlanService {
       await lockPlanRow(tx, planId);
       const locked = await tx.plan.findUniqueOrThrow({
         where: { id: planId },
-        select: { status: true },
+        select: { status: true, is_paused: true },
       });
       const task = await tx.task.create({ data });
       const tasks = await tx.task.findMany({
@@ -480,7 +480,7 @@ export class PlanService {
         tasks,
         changedId: task.id,
         newStatus: task.status,
-        planStatus: locked.status,
+        planStatus: activePlanStatus(locked.status, locked.is_paused),
       });
       for (const [id, status] of rollup.tasks) {
         await tx.task.update({ where: { id }, data: { status } });
@@ -528,9 +528,11 @@ export class PlanService {
 
 const MAX_TASK_DEPTH = 4;
 
+// HOLD: a stale Claude Code plan; adding work picks it up again (READY).
 const CLAUDE_CODE_TASK_ADD_STATUSES: EPlanStatus[] = [
   EPlanStatus.DRAFT,
   EPlanStatus.READY,
+  EPlanStatus.HOLD,
   EPlanStatus.DONE,
 ];
 

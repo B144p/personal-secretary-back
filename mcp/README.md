@@ -83,7 +83,8 @@ Details:
   earlier one; it is not turned into a task.
 - Plans idle for 14 days are left out of the session-start block (it says how
   many); a daily job (03:00) puts Claude Code plans idle for 30 days on HOLD.
-  Moving a plan back to READY resumes it.
+  The session-start block still counts held plans, and any step update or
+  `add_task` on a held plan (or Reopen in the web app) makes it READY again.
   `import_key` is `<session_id>:<plan hash>`, so a retry never duplicates a
   plan, and a new plan in the same session creates a new one.
 - Hooks never block Claude. Failures go to `~/.claude/personal-pm/hook.log`

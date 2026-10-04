@@ -7,8 +7,9 @@ export const STALE_CLOSE_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Claude Code plans nobody touched for a month go on HOLD, so a repo does not
-// slowly collect half-finished plans in its session context. HOLD → READY
-// resumes one. Only status changes: no tasks, OpenAI or calendar involved.
+// slowly collect half-finished plans in its session context. Any step
+// update or add_task on it, or Reopen in the web app, makes it READY again
+// (activePlanStatus in plan.status/rollup.ts). Only status changes: no tasks, OpenAI or calendar involved.
 @Injectable()
 export class StalePlansCron {
   private readonly logger = new Logger(StalePlansCron.name);

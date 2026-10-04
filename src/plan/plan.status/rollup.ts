@@ -19,6 +19,12 @@ export interface RollupResult {
 const TERMINAL: ETaskStatus[] = [ETaskStatus.DONE, ETaskStatus.CANCELLED];
 export const isTerminal = (s: ETaskStatus) => TERMINAL.includes(s);
 
+// A Claude Code plan on HOLD (put there by the 30-day stale job, never
+// paused: Claude Code plans can't be scheduled) is picked up again by any
+// work on it, so the rollup starts from READY instead.
+export const activePlanStatus = (status: EPlanStatus, isPaused: boolean) =>
+  status === EPlanStatus.HOLD && !isPaused ? EPlanStatus.READY : status;
+
 export const rollupTaskStatus = ({
   tasks,
   changedId,

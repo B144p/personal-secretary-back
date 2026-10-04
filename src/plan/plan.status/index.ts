@@ -5,7 +5,7 @@ import type { UpdateTaskStatusDto } from '../dto/update-task-status.dto';
 import { assertClaudeCodePlan } from '../source-guard';
 import { loadPlanWithTaskTree } from '../task-tree';
 import { lockPlanRow, ROLLUP_TX_OPTIONS } from './lock';
-import { rollupTaskStatus } from './rollup';
+import { activePlanStatus, rollupTaskStatus } from './rollup';
 
 // Task status reported by Claude Code while it works. Prisma only: no
 // OpenAI, and no TaskEvent/calendar writes (Claude Code plans are never
@@ -43,7 +43,7 @@ export class PlanTaskStatusService {
         tasks: plan.tasks,
         changedId: taskId,
         newStatus,
-        planStatus: plan.status,
+        planStatus: activePlanStatus(plan.status, plan.is_paused),
       });
 
       await tx.task.update({

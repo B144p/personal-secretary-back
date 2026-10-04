@@ -228,8 +228,9 @@ const savedContext = (plan: PlanOut) =>
 
 const handlers: Record<string, (input: HookInput) => void | Promise<void>> = {
   // New, resumed, cleared or compacted session: hand Claude the open plan of
-  // this repo before the first prompt. Quiet outside git, when nothing is
-  // open, and on any error; a slow backend must not hold the session up.
+  // this repo before the first prompt. Quiet outside git, when the repo has no
+  // plans left to mention, and on any error; a slow backend must not hold
+  // the session up.
   'session-start': async (input) => {
     const baseUrl = process.env.PM_API_URL;
     const token = process.env.PM_TOKEN;
@@ -239,10 +240,16 @@ const handlers: Record<string, (input: HookInput) => void | Promise<void>> = {
     const query = new URLSearchParams({ repo_key });
     if (branch) query.set('branch', branch);
     const api = createApi({ baseUrl, token, timeoutMs: 3_000 });
-    const ctx = await api.get<{ plan: unknown; text: string }>(
-      `/context?${query}`,
-    );
-    if (ctx.plan) output('SessionStart', { additionalContext: ctx.text });
+    const ctx = await api.get<{
+      plan: unknown;
+      text: string;
+      stale_count: number;
+      held_count?: number;
+    }>(`/context?${query}`);
+    // Also the one-liner when only idle or held plans exist, so a plan put on
+    // HOLD after 30 days is still mentioned instead of vanishing.
+    if (ctx.plan || ctx.stale_count || ctx.held_count)
+      output('SessionStart', { additionalContext: ctx.text });
   },
 
   // Plan submitted. Nothing is sent yet: the user may still say "No, keep

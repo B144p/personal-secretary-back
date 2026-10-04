@@ -13,6 +13,9 @@ export class ContextService {
 
   async getRepoContext(userId: string, query: RepoContextQuery) {
     const repoKey = normalizeRepoKey(query.repo_key);
+    const held = await this.prisma.plan.count({
+      where: { user_id: userId, repo_key: repoKey, status: EPlanStatus.HOLD },
+    });
     const plans = await this.prisma.plan.findMany({
       where: {
         user_id: userId,
@@ -41,6 +44,7 @@ export class ContextService {
       repoKey,
       branch: query.branch ?? null,
       plans,
+      held,
       now: new Date(),
     });
   }

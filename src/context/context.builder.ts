@@ -44,6 +44,7 @@ export interface RepoContext {
   cancelled: { id: string; title: string; note: string }[];
   other_open_count: number;
   stale_count: number;
+  held_count: number;
   text: string;
 }
 
@@ -104,17 +105,24 @@ export const buildRepoContext = ({
   repoKey,
   branch,
   plans,
+  held = 0,
   now,
 }: {
   repoKey: string;
   branch: string | null;
   // Open plans of this repo (not DONE or HOLD).
   plans: ContextPlan[];
+  // Plans of this repo on HOLD (e.g. put there after 30 idle days).
+  held?: number;
   now: Date;
 }): RepoContext => {
   const { plan, otherOpen, stale } = pickPlan(plans, branch, now);
-  const staleNote = stale
-    ? ` (${stale} idle for over ${STALE_HIDE_DAYS} days, see list_plans)`
+  const notes = [
+    ...(stale ? [`${stale} idle for over ${STALE_HIDE_DAYS} days`] : []),
+    ...(held ? [`${held} on hold`] : []),
+  ];
+  const staleNote = notes.length
+    ? ` (${notes.join(', ')}, see list_plans)`
     : '';
 
   if (!plan) {
@@ -127,6 +135,7 @@ export const buildRepoContext = ({
       cancelled: [],
       other_open_count: 0,
       stale_count: stale,
+      held_count: held,
       text: `Personal PM: no open plan for this repo${staleNote}.`,
     };
   }
@@ -163,7 +172,7 @@ export const buildRepoContext = ({
       ? [
           `${otherOpen} other open plan${otherOpen > 1 ? 's' : ''} in this repo: call list_plans with this repo_key${staleNote}.`,
         ]
-      : stale
+      : notes.length
         ? [`Older plans${staleNote}.`]
         : []),
     'Report steps with update_task_status; get_plan shows the full tree.',
@@ -211,6 +220,7 @@ export const buildRepoContext = ({
     })),
     other_open_count: otherOpen,
     stale_count: stale,
+    held_count: held,
     text,
   };
 };

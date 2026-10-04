@@ -1,5 +1,5 @@
 import { EPlanStatus, ETaskStatus } from '@prisma/client';
-import { rollupTaskStatus, type RollupTask } from './rollup';
+import { rollupTaskStatus, type RollupTask, activePlanStatus } from './rollup';
 
 const { PENDING, IN_PROGRESS, DONE, CANCELLED } = ETaskStatus;
 
@@ -66,5 +66,11 @@ describe('rollupTaskStatus', () => {
     const r = run(tree(), 'B', DONE);
     expect(r.tasks.size).toBe(0);
     expect(r.plan).toBe(EPlanStatus.READY);
+  });
+
+  it('treats a stale HOLD plan as READY again, but keeps a paused one on HOLD', () => {
+    expect(activePlanStatus(EPlanStatus.HOLD, false)).toBe(EPlanStatus.READY);
+    expect(activePlanStatus(EPlanStatus.HOLD, true)).toBe(EPlanStatus.HOLD);
+    expect(activePlanStatus(EPlanStatus.DRAFT, false)).toBe(EPlanStatus.DRAFT);
   });
 });

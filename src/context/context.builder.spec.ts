@@ -133,4 +133,29 @@ describe('buildRepoContext', () => {
     expect(ctx.text).toContain('Dropped 4');
     expect(ctx.tasks_left).toHaveLength(40);
   });
+
+  it('mentions plans on hold, with or without an open plan', () => {
+    const none = buildRepoContext({
+      repoKey: 'github.com/me/repo',
+      branch: 'main',
+      plans: [],
+      held: 2,
+      now: NOW,
+    });
+    expect(none.held_count).toBe(2);
+    expect(none.text).toBe(
+      'Personal PM: no open plan for this repo (2 on hold, see list_plans).',
+    );
+
+    const withPlan = buildRepoContext({
+      repoKey: 'github.com/me/repo',
+      branch: 'main',
+      plans: [plan(), plan({ last_activity_at: daysAgo(20) })],
+      held: 1,
+      now: NOW,
+    });
+    expect(withPlan.text).toContain(
+      'Older plans (1 idle for over 14 days, 1 on hold, see list_plans).',
+    );
+  });
 });
