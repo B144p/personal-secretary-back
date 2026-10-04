@@ -11,6 +11,13 @@ export class ApiError extends Error {
   }
 }
 
+interface CallOptions {
+  timeoutMs?: number;
+}
+
+// Same as the web app's limit for scheduling and feedback.
+export const CALENDAR_CALL_TIMEOUT_MS = 120_000;
+
 export const createApi = ({
   baseUrl,
   token,
@@ -24,6 +31,8 @@ export const createApi = ({
     method: 'GET' | 'POST' | 'PATCH',
     path: string,
     body?: unknown,
+    // Calls that book or move calendar events can take a while.
+    callTimeoutMs = timeoutMs,
   ): Promise<T> => {
     let res: Response;
     try {
@@ -34,7 +43,7 @@ export const createApi = ({
           ...(body !== undefined && { 'Content-Type': 'application/json' }),
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(callTimeoutMs),
       });
     } catch (err) {
       throw new ApiError(
@@ -59,9 +68,12 @@ export const createApi = ({
   };
 
   return {
-    get: <T>(path: string) => request<T>('GET', path),
-    post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
-    patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
+    get: <T>(path: string, opts?: CallOptions) =>
+      request<T>('GET', path, undefined, opts?.timeoutMs),
+    post: <T>(path: string, body: unknown, opts?: CallOptions) =>
+      request<T>('POST', path, body, opts?.timeoutMs),
+    patch: <T>(path: string, body: unknown, opts?: CallOptions) =>
+      request<T>('PATCH', path, body, opts?.timeoutMs),
   };
 };
 
