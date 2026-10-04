@@ -145,6 +145,8 @@ export const buildAgenda = ({
   const byDay = Array.from({ length: count }, (_, i) => {
     const day = start.add(i, 'day');
     return {
+      begin: day,
+      end: start.add(i + 1, 'day'),
       date: day.format('YYYY-MM-DD'),
       is_day_off: userState.days_off.includes(day.day()),
       items: [] as (AgendaItem & { sort: number })[],
@@ -176,24 +178,38 @@ export const buildAgenda = ({
     if (isPlanEvent(e)) continue;
     const allDay = !e.start?.dateTime && !!e.start?.date;
     // All-day dates are calendar dates, not instants: read them in the
-    // user's zone so they don't shift a day.
+    // user's zone so they don't shift a day. Their end date is exclusive.
     const s = allDay
       ? dayjs.tz(e.start!.date!, tz)
       : e.start?.dateTime
         ? dayjs(e.start.dateTime)
         : null;
     if (!s) continue;
-    const endRaw = e.end?.dateTime ?? e.end?.date;
-    dayOf(s)?.items.push({
-      kind: 'event',
-      start: allDay ? e.start!.date! : iso(s.toDate()),
-      end: allDay ? (e.end?.date ?? e.start!.date!) : iso(endRaw ?? s.toDate()),
-      summary: e.summary ?? '(no title)',
-      all_day: allDay,
-      location: e.location ?? null,
-      // All-day items first, then by start time.
-      sort: allDay ? -Infinity : s.valueOf(),
-    });
+    const endRaw = allDay ? e.end?.date : e.end?.dateTime;
+    const end = endRaw
+      ? allDay
+        ? dayjs.tz(endRaw, tz)
+        : dayjs(endRaw)
+      : s.add(allDay ? 1 : 0, 'day');
+    // Google returns events that overlap the range, so an event can start
+    // before the first day (yesterday's trip, a meeting past midnight). It
+    // shows on every day it covers.
+    for (const day of byDay) {
+      const overlaps =
+        s.isBefore(day.end) && (end.isAfter(day.begin) || s.isSame(day.begin));
+      if (!overlaps) continue;
+      day.items.push({
+        kind: 'event',
+        start: allDay ? e.start!.date! : iso(s.toDate()),
+        end: allDay ? (e.end?.date ?? e.start!.date!) : iso(end.toDate()),
+        summary: e.summary ?? '(no title)',
+        all_day: allDay,
+        location: e.location ?? null,
+        // All-day items first, then by start time (carried-over ones at the
+        // top of the day).
+        sort: allDay ? -Infinity : Math.max(s.valueOf(), day.begin.valueOf()),
+      });
+    }
   }
 
   return {

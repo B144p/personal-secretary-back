@@ -44,7 +44,7 @@ describe('buildAgenda', () => {
     const late: AgendaCalendarEvent = {
       summary: 'Late call',
       start: { dateTime: '2026-10-03T23:30:00+07:00' },
-      end: { dateTime: '2026-10-04T00:15:00+07:00' },
+      end: { dateTime: '2026-10-03T23:59:00+07:00' },
     };
     const agenda = build({ calendarEvents: [late], days: 2 });
     expect(agenda.days.map((d) => d.items.length)).toEqual([1, 0]);
@@ -116,6 +116,33 @@ describe('buildAgenda', () => {
       all_day: true,
       start: '2026-10-03',
     });
+  });
+
+  it('shows events that started before the day on every day they cover', () => {
+    const agenda = build({
+      days: 2,
+      calendarEvents: [
+        {
+          summary: 'Vacation',
+          start: { date: '2026-10-01' },
+          end: { date: '2026-10-05' }, // exclusive: covers Oct 1-4
+        },
+        {
+          summary: 'Night deploy',
+          start: { dateTime: '2026-10-02T23:00:00+07:00' },
+          end: { dateTime: '2026-10-03T01:00:00+07:00' },
+        },
+        {
+          summary: 'Ended before today',
+          start: { dateTime: '2026-10-02T10:00:00+07:00' },
+          end: { dateTime: '2026-10-02T11:00:00+07:00' },
+        },
+      ],
+    });
+    const titles = agenda.days.map((d) =>
+      d.items.map((i) => (i.kind === 'event' ? i.summary : i.title)),
+    );
+    expect(titles).toEqual([['Vacation', 'Night deploy'], ['Vacation']]);
   });
 
   it('still returns the plan side when the calendar failed', () => {
