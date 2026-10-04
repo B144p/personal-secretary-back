@@ -62,21 +62,31 @@ export class CalendarScheduleService {
   private async doGenerateAndApplyTaskSchedule({
     userId,
     id,
+    resume = false,
   }: ITaskScheduleProps) {
     // Single choke point for every path that books calendar events
     // (schedule, resume) — Claude Code plans never touch the calendar.
     const source = await this.prisma.plan.findFirst({
       where: { id, user_id: userId },
-      select: { source_type: true, status: true },
+      select: { source_type: true, status: true, is_paused: true },
     });
     // Only the owner's plan: the lookups below read by id alone.
     if (!source)
       throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
     assertCanSchedule(source);
-    if (source.status === EPlanStatus.DONE) {
+    // Booking again would duplicate a SCHEDULED plan's events, and a paused
+    // plan comes back only through resume (which also clears the pause).
+    const schedulable = resume
+      ? source.status === EPlanStatus.HOLD && source.is_paused
+      : (source.status === EPlanStatus.DRAFT ||
+          source.status === EPlanStatus.READY) &&
+        !source.is_paused;
+    if (!schedulable) {
       throw new AppException(
         AppErrorCode.INVALID_TRANSITION,
-        'A DONE plan cannot be scheduled',
+        resume
+          ? 'Only a paused plan can be resumed'
+          : `A ${source.is_paused ? 'paused' : source.status} plan cannot be scheduled; only DRAFT or READY plans can`,
       );
     }
 

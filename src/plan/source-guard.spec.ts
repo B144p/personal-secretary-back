@@ -162,4 +162,53 @@ describe('Claude Code plan source guard', () => {
     }
     expect(calendarService.getClient).not.toHaveBeenCalled();
   });
+
+  it('schedules only DRAFT or READY plans; resume only books a paused HOLD plan', async () => {
+    const run = async (
+      plan: { status: EPlanStatus; is_paused: boolean },
+      resume?: boolean,
+    ) => {
+      // Second findFirst = "another plan scheduled": reaching it means the
+      // status check let the call through.
+      const findFirst = jest
+        .fn()
+        .mockResolvedValueOnce({
+          source_type: EPlanSourceType.GENERATE,
+          ...plan,
+        })
+        .mockResolvedValueOnce({ id: 'other' });
+      const service = new CalendarScheduleService(
+        { plan: { findFirst } } as unknown as PrismaService,
+        calendarService as unknown as CalendarService,
+      );
+      return service
+        .generateAndApplyTaskSchedule({ userId: 'u1', id: 'plan1', resume })
+        .catch((e: { code: string }) => e.code);
+    };
+    const { DRAFT, READY, SCHEDULED, HOLD } = EPlanStatus;
+
+    expect(await run({ status: DRAFT, is_paused: false })).toBe(
+      AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+    );
+    expect(await run({ status: READY, is_paused: false })).toBe(
+      AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+    );
+    // Booking a SCHEDULED plan again would duplicate its events.
+    expect(await run({ status: SCHEDULED, is_paused: false })).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(await run({ status: HOLD, is_paused: true })).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(await run({ status: READY, is_paused: true })).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(await run({ status: HOLD, is_paused: true }, true)).toBe(
+      AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+    );
+    expect(await run({ status: HOLD, is_paused: false }, true)).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(calendarService.getClient).not.toHaveBeenCalled();
+  });
 });

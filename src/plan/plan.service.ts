@@ -228,6 +228,7 @@ export class PlanService {
       await this.calendarScheduleService.generateAndApplyTaskSchedule({
         userId,
         id,
+        resume: true,
       });
     }
 
