@@ -17,6 +17,9 @@ export interface IGetCalendarRangeProps {
     timeMin?: string;
     timeMax?: string;
     timeZone?: string;
+    // Expand recurring events into instances (the agenda needs each meeting).
+    singleEvents?: boolean;
+    orderBy?: 'startTime' | 'updated';
   };
 }
 

@@ -7,6 +7,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { Request } from 'express';
 import { AdminModule } from './admin/admin.module';
+import { AgendaModule } from './agenda/agenda.module';
 import { ContextModule } from './context/context.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -57,6 +58,7 @@ import { IJwtSignData } from './utils';
     UserModule,
     PlanModule,
     ContextModule,
+    AgendaModule,
     TaskModule,
   ],
   controllers: [AppController],
