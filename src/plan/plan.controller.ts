@@ -11,17 +11,16 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { ApprovedGuard } from 'src/common/guards/approved.guard';
 import { JwtOrPatGuard } from 'src/common/guards/jwt-or-pat.guard';
-import { JWT_STRATEGY_NAME } from 'src/google/google.constants';
 import { validateJwtPayload } from 'src/utils';
 import { generatePlanSchema } from './dto/generate-plan.dto';
 import { importPlanSchema } from './dto/import-plan.dto';
 import { listPlansQuerySchema } from './dto/list-plans.dto';
 import { reGeneratePlanSchema } from './dto/re-generate-plan.dto';
+import { updateProgressSchema } from './dto/update-progress.dto';
 import { updateTaskStatusSchema } from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
@@ -214,8 +213,9 @@ export class PlanController {
   }
 }
 
+// Also used by agents (Chief of Staff, Go runner) with a personal access token.
 @Controller('plan-progress')
-@UseGuards(AuthGuard(JWT_STRATEGY_NAME), ApprovedGuard)
+@UseGuards(JwtOrPatGuard, ApprovedGuard)
 export class PlanProgressController {
   constructor(private readonly updateProgressService: UpdateProgressService) {}
 
@@ -228,15 +228,12 @@ export class PlanProgressController {
 
   @Patch()
   updateProgress(@Req() req: Request, @Body() body: unknown) {
+    const parsed = updateProgressSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
     return this.updateProgressService.updateProgress({
       userId: validateJwtPayload(req.user).sub,
-      data: body as {
-        statusChanges?: Array<{
-          taskId: string;
-          newStatus: 'PENDING' | 'IN_PROGRESS' | 'DONE' | 'HOLD';
-        }>;
-        contextText?: string;
-      },
+      data: parsed.data,
     });
   }
 }

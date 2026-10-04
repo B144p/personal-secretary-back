@@ -118,6 +118,38 @@ describe('UpdateProgressService', () => {
     expect(markerOrder).toBeLessThan(cleanupOrder);
   });
 
+  it('rejects task ids that are not leaves of the scheduled plan before writing anything', async () => {
+    planFindFirst.mockResolvedValueOnce({
+      id: 'plan1',
+      tasks: [
+        { ...completingTask, id: 'parent', events: [] },
+        { ...completingTask, id: 't1', parent_task_id: 'parent' },
+      ],
+    });
+
+    for (const taskId of ['other-plan-task', 'parent']) {
+      await expect(
+        service.updateProgress({
+          userId: 'u1',
+          data: { statusChanges: [{ taskId, newStatus: 'DONE' }] },
+        }),
+      ).rejects.toMatchObject({
+        code: AppErrorCode.TASK_NOT_IN_PLAN,
+        details: { taskIds: [taskId] },
+      });
+      planFindFirst.mockResolvedValueOnce({
+        id: 'plan1',
+        tasks: [
+          { ...completingTask, id: 'parent', events: [] },
+          { ...completingTask, id: 't1', parent_task_id: 'parent' },
+        ],
+      });
+    }
+    expect(helpers.reconcileCalendar).not.toHaveBeenCalled();
+    expect(helpers.applyStatusChanges).not.toHaveBeenCalled();
+    expect(helpers.persistDailyFeedback).not.toHaveBeenCalled();
+  });
+
   it('rejects a second concurrent call for the same user while the first is in flight', async () => {
     let resolveFindFirst!: (v: unknown) => void;
     planFindFirst.mockReturnValueOnce(

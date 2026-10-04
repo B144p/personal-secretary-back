@@ -99,6 +99,18 @@ export class UpdateProgressService {
         'No SCHEDULED plan found',
       );
 
+    // Only leaves of this plan can change here. Checked before anything is
+    // written, so a stray id (another plan, a parent task) changes nothing.
+    const planLeafIds = getLeafIds(plan.tasks);
+    const foreign = statusChanges.filter((c) => !planLeafIds.has(c.taskId));
+    if (foreign.length) {
+      throw new AppException(
+        AppErrorCode.TASK_NOT_IN_PLAN,
+        'Some tasks are not steps of the scheduled plan',
+        { taskIds: foreign.map((c) => c.taskId), planId: plan.id },
+      );
+    }
+
     const userState = await this.prisma.userState.findUnique({
       where: { user_id: userId },
     });
