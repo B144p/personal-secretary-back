@@ -20,7 +20,10 @@ import { generatePlanSchema } from './dto/generate-plan.dto';
 import { importPlanSchema } from './dto/import-plan.dto';
 import { listPlansQuerySchema } from './dto/list-plans.dto';
 import { reGeneratePlanSchema } from './dto/re-generate-plan.dto';
-import { updateProgressSchema } from './dto/update-progress.dto';
+import {
+  rescheduleSchema,
+  updateProgressSchema,
+} from './dto/update-progress.dto';
 import { updateTaskStatusSchema } from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
@@ -234,6 +237,18 @@ export class PlanProgressController {
     return this.updateProgressService.updateProgress({
       userId: validateJwtPayload(req.user).sub,
       data: parsed.data,
+    });
+  }
+
+  // Repack slipped and remaining steps of the scheduled plan, no status change.
+  @Post('reschedule')
+  reschedule(@Req() req: Request, @Body() body: unknown) {
+    const parsed = rescheduleSchema.safeParse(body ?? {});
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
+    return this.updateProgressService.reschedule({
+      userId: validateJwtPayload(req.user).sub,
+      note: parsed.data.note,
     });
   }
 }

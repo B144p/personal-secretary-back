@@ -23,3 +23,9 @@ export const updateProgressSchema = z.object({
 });
 
 export type UpdateProgressDto = z.infer<typeof updateProgressSchema>;
+
+// Body of POST /plan-progress/reschedule. The note, when given, is saved as
+// that day's feedback text.
+export const rescheduleSchema = z.object({
+  note: z.string().trim().min(1).max(2000).optional(),
+});

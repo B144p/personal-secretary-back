@@ -150,6 +150,81 @@ describe('UpdateProgressService', () => {
     expect(helpers.persistDailyFeedback).not.toHaveBeenCalled();
   });
 
+  describe('reschedule', () => {
+    const slipped = {
+      id: 't1',
+      parent_task_id: null,
+      status: ETaskStatus.PENDING,
+      events: [
+        {
+          id: 'ev1',
+          google_event_id: 'g1',
+          end: new Date(Date.now() - 3600_000),
+        },
+      ],
+    };
+    const onTrack = {
+      ...slipped,
+      events: [{ ...slipped.events[0], end: future }],
+    };
+
+    it('repacks slipped steps without a status change or feedback row', async () => {
+      planFindFirst.mockResolvedValueOnce({ id: 'plan1', tasks: [slipped] });
+      planFindUnique.mockResolvedValueOnce({ id: 'plan1', tasks: [slipped] });
+
+      await service.reschedule({ userId: 'u1' });
+
+      expect(helpers.applyRuleReschedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          slippedLeaves: [expect.objectContaining({ id: 't1' })],
+        }),
+        expect.anything(),
+      );
+      expect(helpers.applyStatusChanges).toHaveBeenCalledWith(
+        'plan1',
+        [],
+        expect.anything(),
+      );
+      expect(helpers.persistDailyFeedback).not.toHaveBeenCalled();
+    });
+
+    it('returns rescheduled 0 when nothing slipped, and saves a given note', async () => {
+      planFindFirst.mockResolvedValueOnce({ id: 'plan1', tasks: [onTrack] });
+      planFindUnique.mockResolvedValueOnce({ id: 'plan1', tasks: [onTrack] });
+
+      await expect(
+        service.reschedule({ userId: 'u1', note: 'sick day' }),
+      ).resolves.toEqual({
+        rescheduled: 0,
+        planStatus: EPlanStatus.SCHEDULED,
+        unscheduledTaskIds: [],
+      });
+      expect(helpers.applyRuleReschedule).not.toHaveBeenCalled();
+      expect(helpers.persistDailyFeedback).toHaveBeenCalledWith(
+        'plan1',
+        [],
+        'sick day',
+        userState,
+        expect.anything(),
+      );
+    });
+
+    it('shares the per-user lock with feedback updates', async () => {
+      let release!: (v: unknown) => void;
+      planFindFirst.mockReturnValueOnce(new Promise((r) => (release = r)));
+      const first = service.updateProgress({
+        userId: 'u1',
+        data: { contextText: 'note' },
+      });
+      await expect(service.reschedule({ userId: 'u1' })).rejects.toMatchObject({
+        code: AppErrorCode.PROGRESS_UPDATE_IN_PROGRESS,
+      });
+      release({ id: 'plan1', tasks: [onTrack] });
+      planFindUnique.mockResolvedValueOnce({ id: 'plan1', tasks: [onTrack] });
+      await first;
+    });
+  });
+
   it('rejects a second concurrent call for the same user while the first is in flight', async () => {
     let resolveFindFirst!: (v: unknown) => void;
     planFindFirst.mockReturnValueOnce(

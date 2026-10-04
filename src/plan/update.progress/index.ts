@@ -51,25 +51,47 @@ export class UpdateProgressService {
   }
 
   async updateProgress(props: IUpdateProgressProps) {
+    return this.withProgressLock(props.userId, () =>
+      this.doUpdateProgress(props, 'feedback'),
+    );
+  }
+
+  // Moves slipped and remaining steps of the scheduled plan to the next free
+  // slots without any status change (an agent, or "I fell behind"). Same
+  // pipeline and lock as a feedback update; a feedback row is saved only
+  // when a note is given.
+  async reschedule({ userId, note }: { userId: string; note?: string }) {
+    return this.withProgressLock(userId, () =>
+      this.doUpdateProgress(
+        { userId, data: { statusChanges: [], contextText: note } },
+        'reschedule',
+      ),
+    );
+  }
+
+  private async withProgressLock<T>(userId: string, run: () => Promise<T>) {
     // Guard against a second concurrent call (e.g. double-click, retry) for
     // the same user — each call can create real Google Calendar events
     // before persisting, so a race here would leave one attempt's events
     // orphaned with no DB record, or duplicated outright.
-    if (this.progressLocks.has(props.userId)) {
+    if (this.progressLocks.has(userId)) {
       throw new AppException(
         AppErrorCode.PROGRESS_UPDATE_IN_PROGRESS,
         'A progress update is already in flight for this plan',
       );
     }
-    this.progressLocks.add(props.userId);
+    this.progressLocks.add(userId);
     try {
-      return await this.doUpdateProgress(props);
+      return await run();
     } finally {
-      this.progressLocks.delete(props.userId);
+      this.progressLocks.delete(userId);
     }
   }
 
-  private async doUpdateProgress({ userId, data }: IUpdateProgressProps) {
+  private async doUpdateProgress(
+    { userId, data }: IUpdateProgressProps,
+    mode: 'feedback' | 'reschedule',
+  ) {
     const { statusChanges = [], contextText } = data;
     const deps = {
       prisma: this.prisma,
@@ -77,7 +99,7 @@ export class UpdateProgressService {
       logger: this.logger,
     };
 
-    if (statusChanges.length === 0 && !contextText) {
+    if (mode === 'feedback' && statusChanges.length === 0 && !contextText) {
       throw new AppException(
         AppErrorCode.NO_OP_FEEDBACK,
         'No changes to submit',
@@ -123,14 +145,15 @@ export class UpdateProgressService {
     // 2. Apply status changes
     await applyStatusChanges(plan.id, statusChanges, deps);
 
-    // 3. Persist DailyFeedback
-    await persistDailyFeedback(
-      plan.id,
-      statusChanges,
-      contextText,
-      userState,
-      deps,
-    );
+    // 3. Persist DailyFeedback (a bare reschedule has nothing to record)
+    if (mode === 'feedback' || contextText)
+      await persistDailyFeedback(
+        plan.id,
+        statusChanges,
+        contextText,
+        userState,
+        deps,
+      );
 
     // 4. Re-fetch updated plan tasks
     const updatedPlan = await this.prisma.plan.findUnique({
