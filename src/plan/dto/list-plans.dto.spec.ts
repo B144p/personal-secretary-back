@@ -25,7 +25,7 @@ describe('listPlansQuerySchema', () => {
   it('rejects unknown values', () => {
     expect(listPlansQuerySchema.safeParse({ open: 'yes' }).success).toBe(false);
     expect(
-      listPlansQuerySchema.safeParse({ source_type: 'AGENT' }).success,
+      listPlansQuerySchema.safeParse({ source_type: 'OTHER' }).success,
     ).toBe(false);
   });
 });

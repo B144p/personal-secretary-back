@@ -68,7 +68,7 @@ export class PlanImportService {
           data: {
             user_id: userId,
             title,
-            source_type: EPlanSourceType.CLAUDE_CODE,
+            source_type: EPlanSourceType[dto.source_type ?? 'CLAUDE_CODE'],
             source_id: dto.source_id ?? null,
             import_key: dto.import_key ?? null,
             repo_key: repoKey ? normalizeRepoKey(repoKey) : null,
@@ -95,13 +95,14 @@ export class PlanImportService {
   }
 }
 
-// Claude's steps carry no time estimates — sequence comes from list order.
+// Sequence comes from list order. Claude's steps carry no time estimate;
+// agent plans give one per leaf, which the scheduler uses.
 export const toTaskNodes = (nodes: ImportTaskNode[]): ITaskNode[] =>
   nodes.map((n, i) => ({
     title: n.title,
     description: n.description ?? '',
     sequence_order: i,
-    estimated_minutes: null,
+    estimated_minutes: n.estimated_minutes ?? null,
     children: toTaskNodes(n.children ?? []),
   }));
 

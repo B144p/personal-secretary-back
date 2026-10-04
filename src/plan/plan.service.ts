@@ -15,7 +15,7 @@ import { normalizeRepoKey } from './repo-key';
 import { GeneratePlanService } from './plan.generate';
 import { lockPlanRow, ROLLUP_TX_OPTIONS } from './plan.status/lock';
 import { activePlanStatus, rollupTaskStatus } from './plan.status/rollup';
-import { assertNotClaudeCodePlan } from './source-guard';
+import { assertCanRegenerate } from './source-guard';
 
 @Injectable()
 export class PlanService {
@@ -109,7 +109,7 @@ export class PlanService {
     });
     if (!plan) throw new NotFoundException('Plan not found');
     // Must run before any calendar cleanup or task deletion below.
-    assertNotClaudeCodePlan(plan, 're_generate');
+    assertCanRegenerate(plan);
 
     // Determine the subtree root
     const rootTaskId = dto.task_id ?? null;

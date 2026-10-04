@@ -221,6 +221,7 @@ enum EPlanSourceType {
   GENERATE
   CALENDAR
   CLAUDE_CODE
+  AGENT
 }
 
 enum EPlanStatus {

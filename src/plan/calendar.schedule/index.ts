@@ -9,7 +9,7 @@ import { AppErrorCode, AppException } from 'src/common/errors/app-exception';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ITaskScheduleProps } from '../interfaces';
 import { selectSchedulableLeavesInOrder } from '../leaf-select';
-import { assertNotClaudeCodePlan } from '../source-guard';
+import { assertCanSchedule } from '../source-guard';
 import { buildBusyIntervals, computeRuleSchedule } from '../rule-schedule';
 import { buildActiveTaskEventWrite } from '../task-event.write';
 
@@ -67,9 +67,18 @@ export class CalendarScheduleService {
     // (schedule, resume) — Claude Code plans never touch the calendar.
     const source = await this.prisma.plan.findFirst({
       where: { id, user_id: userId },
-      select: { source_type: true },
+      select: { source_type: true, status: true },
     });
-    if (source) assertNotClaudeCodePlan(source, 'schedule');
+    // Only the owner's plan: the lookups below read by id alone.
+    if (!source)
+      throw new AppException(AppErrorCode.PLAN_NOT_FOUND, 'Plan not found');
+    assertCanSchedule(source);
+    if (source.status === EPlanStatus.DONE) {
+      throw new AppException(
+        AppErrorCode.INVALID_TRANSITION,
+        'A DONE plan cannot be scheduled',
+      );
+    }
 
     // Reject if another plan is already SCHEDULED
     const otherScheduled = await this.prisma.plan.findFirst({
