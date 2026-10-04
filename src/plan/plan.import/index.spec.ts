@@ -61,6 +61,7 @@ describe('PlanImportService', () => {
 
   it('stores a normalized repo_key, the branch and the parent plan', async () => {
     const parentId = '65f357f3-d79e-4e8b-bef8-58086469c7e3';
+    planFindFirst.mockResolvedValue({ id: parentId });
     await service.importPlan('u1', {
       title: 'Follow-up',
       repo_key: 'git@github.com:me/repo.git',
@@ -101,16 +102,18 @@ describe('PlanImportService', () => {
     );
   });
 
-  it("rejects a parent plan that is not the user's, before creating anything", async () => {
+  it("saves the plan without the link when the parent plan is not the user's", async () => {
     planFindFirst.mockResolvedValue(null);
-    await expect(
-      service.importPlan('u1', {
-        title: 'Follow-up',
-        parent_plan_id: '65f357f3-d79e-4e8b-bef8-58086469c7e3',
-        tasks: [{ title: 'Only step' }],
+    await service.importPlan('u1', {
+      title: 'Follow-up',
+      parent_plan_id: '65f357f3-d79e-4e8b-bef8-58086469c7e3',
+      tasks: [{ title: 'Only step' }],
+    });
+    expect(planCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ parent_plan_id: null }),
       }),
-    ).rejects.toMatchObject({ code: 'PLAN_NOT_FOUND' });
-    expect(planCreate).not.toHaveBeenCalled();
+    );
   });
 
   it('writes the nested tree with correct depth, parent and sequence order', async () => {
