@@ -209,6 +209,29 @@ describe('UpdateProgressService', () => {
       );
     });
 
+    it('books remaining steps that have no slot yet', async () => {
+      const unbooked = { ...slipped, id: 't2', events: [] };
+      planFindFirst.mockResolvedValueOnce({
+        id: 'plan1',
+        tasks: [onTrack, unbooked],
+      });
+      planFindUnique.mockResolvedValueOnce({
+        id: 'plan1',
+        tasks: [onTrack, unbooked],
+      });
+
+      await service.reschedule({ userId: 'u1' });
+
+      expect(helpers.applyRuleReschedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          remainingLeaves: expect.arrayContaining([
+            expect.objectContaining({ id: 't2' }),
+          ]),
+        }),
+        expect.anything(),
+      );
+    });
+
     it('shares the per-user lock with feedback updates', async () => {
       let release!: (v: unknown) => void;
       planFindFirst.mockReturnValueOnce(new Promise((r) => (release = r)));

@@ -213,13 +213,20 @@ export class UpdateProgressService {
     // is always a subset of earlyLeaves (DONE is one of its three
     // statuses), so earlyLeaves.length === 0 already implies it. Safe to
     // drop; kept for now to avoid touching this gate mid-branch.
+    // A reschedule also books remaining steps that have no slot at all,
+    // e.g. ones an earlier repack listed in unscheduledTaskIds.
+    const unbookedLeaves =
+      mode === 'reschedule'
+        ? remainingLeaves.filter((t) => t.events.length === 0)
+        : [];
     if (
       !isCompleting &&
       slippedLeaves.length === 0 &&
       completedEarly.length === 0 &&
       completedLate.length === 0 &&
       heldLeavesWithFutureEvents.length === 0 &&
-      earlyLeaves.length === 0
+      earlyLeaves.length === 0 &&
+      unbookedLeaves.length === 0
     ) {
       return {
         rescheduled: 0,
