@@ -63,7 +63,13 @@ export class PlanImportService {
               `Parent plan ${dto.parent_plan_id} not found for user ${userId}; importing without the link`,
             );
         }
-        const repoKey = dto.repo_key ?? dto.source_id;
+        // Claude Code clients that predate repo_key put the remote in
+        // source_id; for agent plans source_id is the agent's name.
+        const repoKey =
+          dto.repo_key ??
+          ((dto.source_type ?? 'CLAUDE_CODE') === 'CLAUDE_CODE'
+            ? dto.source_id
+            : undefined);
         const created = await tx.plan.create({
           data: {
             user_id: userId,

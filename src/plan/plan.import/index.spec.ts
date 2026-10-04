@@ -134,6 +134,8 @@ describe('PlanImportService', () => {
         data: expect.objectContaining({
           source_type: EPlanSourceType.AGENT,
           source_id: 'tutor',
+          // The agent's name is not a repo.
+          repo_key: null,
           status: EPlanStatus.DRAFT,
         }),
       }),
