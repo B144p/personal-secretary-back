@@ -19,7 +19,7 @@ Prisma, no DB connection.
 | `report_progress` *(agent)* | Status changes on the scheduled plan; the backend repacks what is left | `PATCH /plan-progress` |
 | `reschedule` *(agent)* | Moves slipped and remaining steps to the next free slots | `POST /plan-progress/reschedule` |
 | `create_agent_plan` *(agent)* | DRAFT `AGENT` plan with an estimate on every step | `POST /plan/import` |
-| `schedule_plan` *(agent)* | Marks READY if needed and books the plan into Google Calendar | `PATCH /plan/:id/transition`, `PATCH /plan/:id/schedule` |
+| `schedule_plan` *(agent)* | Books a DRAFT or READY plan into Google Calendar; names the plan holding the slot if another one is scheduled | `PATCH /plan/:id/schedule` |
 
 Plans created this way are tagged `CLAUDE_CODE`. They **never call OpenAI and
 never book calendar events**; the backend also rejects `re_generate` and

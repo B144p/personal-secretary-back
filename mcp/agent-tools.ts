@@ -219,7 +219,7 @@ export const registerAgentTools = (server: McpServer, api: Api) => {
     {
       title: 'Schedule plan',
       description: [
-        "Book a plan's steps into the user's Google Calendar inside working hours (a DRAFT plan is marked READY first).",
+        "Book a plan's steps (DRAFT or READY) into the user's Google Calendar inside working hours.",
         'Only one plan can be scheduled at a time: if another holds the slot, tell the user which one and ask what to do.',
         'Always ask the user before calling this. Claude Code plans cannot be scheduled.',
       ].join(' '),
@@ -230,9 +230,6 @@ export const registerAgentTools = (server: McpServer, api: Api) => {
     async ({ plan_id }) => {
       const id = encodeURIComponent(plan_id);
       try {
-        const plan = await api.get<PlanOut>(`/plan/${id}`);
-        if (plan.status === 'DRAFT')
-          await api.patch(`/plan/${id}/transition`, { to: 'READY' });
         const result = await api.patch(`/plan/${id}/schedule`, {}, slow);
         return text(result);
       } catch (err) {
