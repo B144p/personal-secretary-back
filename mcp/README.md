@@ -142,11 +142,14 @@ installed) and you are about to implement a plan-mode plan, call
 personal-pm create_plan once, before any file edit.
 While implementing, call personal-pm update_task_status: IN_PROGRESS when
 you start a step, DONE when it is finished, CANCELLED with the reason as
-note when a step turns out unnecessary. Use add_task for new steps you
-discover.
-When a plan follows up on an earlier one, add a line "Parent plan: <id>"
-to it. A "Personal PM: open plan in this repo" block at session start is
-the plan to resume; get_repo_context shows it again on demand.
+note when a step turns out unnecessary. Use add_task only for steps you
+discover while implementing the current plan. A new feature or new
+requirement is not a new step: it needs a new plan in plan mode. Outside
+plan mode, don't create plans or add tasks for it. When planning a
+follow-up, you may call get_plan on the earlier plan to see what is done,
+cancelled or still open.
+A "Personal PM: open plan in this repo" block at session start is the plan
+to resume: use its step ids for update_task_status.
 ```
 
 To skip the first-use permission prompt for these tools, add to
