@@ -116,6 +116,40 @@ describe('PlanImportService', () => {
     );
   });
 
+  it('stores an agent plan with its source and step estimates', async () => {
+    await service.importPlan('u1', {
+      title: 'Learn Go',
+      source_type: 'AGENT',
+      source_id: 'tutor',
+      tasks: [
+        {
+          title: 'Week 1',
+          children: [{ title: 'Tour of Go', estimated_minutes: 45 }],
+        },
+      ],
+    });
+
+    expect(planCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          source_type: EPlanSourceType.AGENT,
+          source_id: 'tutor',
+          // The agent's name is not a repo.
+          repo_key: null,
+          status: EPlanStatus.DRAFT,
+        }),
+      }),
+    );
+    expect(taskCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          title: 'Tour of Go',
+          estimated_minutes: 45,
+        }),
+      }),
+    );
+  });
+
   it('writes the nested tree with correct depth, parent and sequence order', async () => {
     await service.importPlan('u1', {
       title: 'Plan',
@@ -280,5 +314,44 @@ describe('PlanImportService import_key dedupe', () => {
       .mockResolvedValueOnce({ id: 'winner' });
     const plan = await service.importPlan('u1', dto);
     expect(plan).toMatchObject({ id: 'winner' });
+  });
+});
+
+describe('importPlanSchema for agent plans', () => {
+  const agentPlan = {
+    title: 'Learn Go',
+    source_type: 'AGENT',
+    source_id: 'tutor',
+    tasks: [
+      { title: 'Week 1', children: [{ title: 'Tour', estimated_minutes: 45 }] },
+    ],
+  };
+
+  it('needs an agent name and an estimate on every leaf', () => {
+    expect(importPlanSchema.safeParse(agentPlan).success).toBe(true);
+    expect(
+      importPlanSchema.safeParse({ ...agentPlan, source_id: undefined })
+        .success,
+    ).toBe(false);
+    expect(
+      importPlanSchema.safeParse({
+        ...agentPlan,
+        tasks: [{ title: 'Week 1', children: [{ title: 'Tour' }] }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('keeps Claude Code imports as before: default source, no estimates needed', () => {
+    const parsed = importPlanSchema.parse({
+      title: 'x',
+      tasks: [{ title: 'y' }],
+    });
+    expect(parsed.source_type).toBe('CLAUDE_CODE');
+    expect(
+      importPlanSchema.safeParse({
+        title: 'x',
+        tasks: [{ title: 'y', estimated_minutes: 2 }],
+      }).success,
+    ).toBe(false);
   });
 });

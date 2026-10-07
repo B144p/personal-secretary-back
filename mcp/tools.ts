@@ -12,10 +12,11 @@ import { TASK_STATUS_UPDATES } from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
 import { repoInfo, sessionRepo } from './git';
 
-// Connect, read, create, and report progress. There is intentionally no tool
-// that generates (OpenAI) or schedules (Google Calendar) a plan.
+// Core and Claude Code tools. Neither group generates (OpenAI) or schedules
+// (Google Calendar) a plan; calendar-changing tools live in agent-tools.ts
+// and are only registered with PM_MCP_PROFILE=agent (see index.ts).
 
-const text = (value: unknown): CallToolResult => ({
+export const text = (value: unknown): CallToolResult => ({
   content: [
     {
       type: 'text',
@@ -24,7 +25,7 @@ const text = (value: unknown): CallToolResult => ({
   ],
 });
 
-const fail = (err: unknown): CallToolResult => {
+export const fail = (err: unknown): CallToolResult => {
   const message =
     err instanceof ApiError
       ? `Backend error ${err.status}${err.code ? ` ${err.code}` : ''}: ${err.message}`
@@ -67,8 +68,8 @@ export const outline = (tasks: TaskOut[], indent = ''): string =>
 
 export const planSummary = (plan: PlanOut) =>
   `Plan "${plan.title}" (${plan.status}, id ${plan.id}) with ${countTasks(plan.tasks)} tasks:\n\n${outline(plan.tasks)}`;
-
-export const registerTools = (server: McpServer, api: Api) => {
+// Tools every profile has: read plans and check the connection.
+export const registerCoreTools = (server: McpServer, api: Api) => {
   server.registerTool(
     'whoami',
     {
@@ -149,6 +150,30 @@ export const registerTools = (server: McpServer, api: Api) => {
   );
 
   server.registerTool(
+    'get_plan',
+    {
+      title: 'Get plan',
+      description:
+        'Show one plan with its task tree, including task ids, statuses and status notes. Use it to find task ids for update_task_status and add_task.',
+      inputSchema: { plan_id: z.string().describe('Plan id') },
+    },
+    async ({ plan_id }) => {
+      try {
+        const plan = await api.get<PlanOut>(
+          `/plan/${encodeURIComponent(plan_id)}`,
+        );
+        return text(planSummary(plan));
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+};
+
+// Claude Code sessions: save plan-mode plans and report step status.
+// None of these book calendar events.
+export const registerClaudeCodeTools = (server: McpServer, api: Api) => {
+  server.registerTool(
     'create_plan',
     {
       title: 'Create plan',
@@ -200,26 +225,6 @@ export const registerTools = (server: McpServer, api: Api) => {
           ...where,
         });
         return text(`Created. ${planSummary(plan)}`);
-      } catch (err) {
-        return fail(err);
-      }
-    },
-  );
-
-  server.registerTool(
-    'get_plan',
-    {
-      title: 'Get plan',
-      description:
-        'Show one plan with its task tree, including task ids, statuses and status notes. Use it to find task ids for update_task_status and add_task.',
-      inputSchema: { plan_id: z.string().describe('Plan id') },
-    },
-    async ({ plan_id }) => {
-      try {
-        const plan = await api.get<PlanOut>(
-          `/plan/${encodeURIComponent(plan_id)}`,
-        );
-        return text(planSummary(plan));
       } catch (err) {
         return fail(err);
       }

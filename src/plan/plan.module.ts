@@ -7,12 +7,14 @@ import { GeneratePlanService } from './plan.generate';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
 import { PlanTaskStatusService } from './plan.status';
+import { ProgressController } from './progress/progress.controller';
+import { ProgressService } from './progress/progress.service';
 import { StalePlansCron } from './stale-plans.cron';
 import { UpdateProgressService } from './update.progress';
 
 @Module({
   imports: [UserModule, CalendarModule],
-  controllers: [PlanController, PlanProgressController],
+  controllers: [PlanController, PlanProgressController, ProgressController],
   providers: [
     PlanService,
     CalendarScheduleService,
@@ -21,6 +23,7 @@ import { UpdateProgressService } from './update.progress';
     PlanTaskStatusService,
     UpdateProgressService,
     StalePlansCron,
+    ProgressService,
   ],
 })
 export class PlanModule {}

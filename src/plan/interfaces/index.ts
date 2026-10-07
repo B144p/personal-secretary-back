@@ -24,6 +24,9 @@ export type IRemovePlanProps = IUserReq & {
 
 export interface ITaskScheduleProps extends IUserReq {
   id: string;
+  // Set by resume: books a paused (HOLD) plan again. Every other caller may
+  // only schedule a DRAFT or READY plan that is not paused.
+  resume?: boolean;
 }
 
 export interface IUpdatePlanStatus {

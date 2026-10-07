@@ -11,13 +11,18 @@ export const IMPORT_MAX_TASKS = 100;
 export interface ImportTaskNode {
   title: string;
   description?: string;
+  // Minutes the step takes; agent plans need it on every leaf to be booked.
+  estimated_minutes?: number;
   children?: ImportTaskNode[];
 }
+
+export const IMPORT_SOURCE_TYPES = ['CLAUDE_CODE', 'AGENT'] as const;
 
 export const importTaskNodeSchema: z.ZodType<ImportTaskNode> = z.lazy(() =>
   z.object({
     title: z.string().trim().min(1).max(200),
     description: z.string().max(2000).optional(),
+    estimated_minutes: z.number().int().min(5).max(480).optional(),
     children: z.array(importTaskNodeSchema).optional(),
   }),
 );
@@ -37,9 +42,24 @@ const measure = (
     { count: 0, maxDepth: -1 },
   );
 
+const missingEstimates = (nodes: ImportTaskNode[]): number =>
+  nodes.reduce(
+    (n, t) =>
+      n +
+      (t.children?.length
+        ? missingEstimates(t.children)
+        : t.estimated_minutes
+          ? 0
+          : 1),
+    0,
+  );
+
 export const importPlanSchema = z
   .object({
     title: z.string().trim().min(1).max(200),
+    // CLAUDE_CODE (default: hooks and create_plan) or AGENT (create_agent_plan:
+    // a plan an agent hands over to be scheduled; source_id = agent name).
+    source_type: z.enum(IMPORT_SOURCE_TYPES).default('CLAUDE_CODE'),
     source_id: z.string().trim().max(500).optional(),
     // Set by the plan hook ("<session_id>:<plan hash>"). Re-sending the same
     // key returns the existing plan instead of creating a duplicate.
@@ -53,6 +73,22 @@ export const importPlanSchema = z
     tasks: z.array(importTaskNodeSchema).min(1),
   })
   .superRefine((plan, ctx) => {
+    if (plan.source_type === 'AGENT') {
+      if (!plan.source_id) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['source_id'],
+          message: 'Agent plans need source_id (the agent name)',
+        });
+      }
+      if (missingEstimates(plan.tasks) > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['tasks'],
+          message: 'Every leaf task of an agent plan needs estimated_minutes',
+        });
+      }
+    }
     const { count, maxDepth } = measure(plan.tasks, 0);
     if (maxDepth > IMPORT_MAX_DEPTH) {
       ctx.addIssue({
@@ -70,4 +106,7 @@ export const importPlanSchema = z
     }
   });
 
-export type ImportPlanDto = z.infer<typeof importPlanSchema>;
+// source_type may be left out by callers (defaults to CLAUDE_CODE).
+type ParsedImportPlan = z.infer<typeof importPlanSchema>;
+export type ImportPlanDto = Omit<ParsedImportPlan, 'source_type'> &
+  Partial<Pick<ParsedImportPlan, 'source_type'>>;

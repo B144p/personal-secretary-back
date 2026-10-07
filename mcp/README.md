@@ -14,6 +14,12 @@ Prisma, no DB connection.
 | `update_task_status` | PENDING / IN_PROGRESS / DONE / CANCELLED (reason required) | `PATCH /plan/:id/tasks/:taskId/status` |
 | `add_task` | Adds a step found mid-work, with the reason | `POST /plan/:id/tasks` |
 | `get_repo_context` | The open plan of the session's repo: open steps, cancelled reasons, other open plans | `GET /context?repo_key=&branch=` |
+| `get_today` | The user's day(s): plan steps, calendar events, slipped steps, Claude Code work in progress | `GET /agenda?date=&days=` |
+| `get_progress` | Percent done, slipped steps, next session, planned finish per plan | `GET /progress`, `GET /plan/:id/progress` |
+| `report_progress` *(agent)* | Status changes on the scheduled plan; the backend repacks what is left | `PATCH /plan-progress` |
+| `reschedule` *(agent)* | Moves slipped and remaining steps to the next free slots | `POST /plan-progress/reschedule` |
+| `create_agent_plan` *(agent)* | DRAFT `AGENT` plan with an estimate on every step | `POST /plan/import` |
+| `schedule_plan` *(agent)* | Books a DRAFT or READY plan into Google Calendar; names the plan holding the slot if another one is scheduled | `PATCH /plan/:id/schedule` |
 
 Plans created this way are tagged `CLAUDE_CODE`. They **never call OpenAI and
 never book calendar events**; the backend also rejects `re_generate` and
@@ -22,6 +28,26 @@ Parents and the plan follow automatically: closing a parent closes its open
 sub-tasks, a parent is DONE once all its children are DONE/CANCELLED, and the
 plan moves DRAFT → READY on the first update and to DONE when every top-level
 task is closed.
+
+## Profiles
+
+`PM_MCP_PROFILE` picks the tools. Calendar-changing tools only exist where you
+opt in, so coding sessions keep the rule "never books calendar events".
+
+| Profile | Tools |
+|---|---|
+| `claude-code` (default) | `whoami`, `list_plans`, `get_plan`, `get_today`, `get_progress`, `create_plan`, `update_task_status`, `add_task`, `get_repo_context` |
+| `agent` | `whoami`, `list_plans`, `get_plan`, `get_today`, `get_progress`, `report_progress`, `reschedule`, `create_agent_plan`, `schedule_plan` |
+| `all` | both |
+
+Register the agent profile as a second server, ideally with its own token
+(`pnpm create-pat <email> chief`), so tool names stay distinct:
+
+```sh
+claude mcp add pm-agent --scope user -e PM_MCP_PROFILE=agent -- /abs/path/personal-secretary-back/mcp/run.sh
+```
+
+Calls that book or move events wait up to 120 s, like the web app.
 
 ## Setup
 
@@ -116,11 +142,14 @@ installed) and you are about to implement a plan-mode plan, call
 personal-pm create_plan once, before any file edit.
 While implementing, call personal-pm update_task_status: IN_PROGRESS when
 you start a step, DONE when it is finished, CANCELLED with the reason as
-note when a step turns out unnecessary. Use add_task for new steps you
-discover.
-When a plan follows up on an earlier one, add a line "Parent plan: <id>"
-to it. A "Personal PM: open plan in this repo" block at session start is
-the plan to resume; get_repo_context shows it again on demand.
+note when a step turns out unnecessary. Use add_task only for steps you
+discover while implementing the current plan. A new feature or new
+requirement is not a new step: it needs a new plan in plan mode. Outside
+plan mode, don't create plans or add tasks for it. When planning a
+follow-up, you may call get_plan on the earlier plan to see what is done,
+cancelled or still open.
+A "Personal PM: open plan in this repo" block at session start is the plan
+to resume: use its step ids for update_task_status.
 ```
 
 To skip the first-use permission prompt for these tools, add to

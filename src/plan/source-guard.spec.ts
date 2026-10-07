@@ -62,9 +62,10 @@ describe('Claude Code plan source guard', () => {
   });
 
   it('schedule rejects before any calendar call', async () => {
-    const findFirst = jest
-      .fn()
-      .mockResolvedValue({ source_type: EPlanSourceType.CLAUDE_CODE });
+    const findFirst = jest.fn().mockResolvedValue({
+      source_type: EPlanSourceType.CLAUDE_CODE,
+      status: EPlanStatus.READY,
+    });
     const service = new CalendarScheduleService(
       { plan: { findFirst } } as unknown as PrismaService,
       calendarService as unknown as CalendarService,
@@ -83,7 +84,10 @@ describe('Claude Code plan source guard', () => {
     // returning one proves execution continued past the source guard.
     const findFirst = jest
       .fn()
-      .mockResolvedValueOnce({ source_type: EPlanSourceType.GENERATE })
+      .mockResolvedValueOnce({
+        source_type: EPlanSourceType.GENERATE,
+        status: EPlanStatus.READY,
+      })
       .mockResolvedValueOnce({ id: 'other' });
     const service = new CalendarScheduleService(
       { plan: { findFirst } } as unknown as PrismaService,
@@ -93,5 +97,118 @@ describe('Claude Code plan source guard', () => {
     await expect(
       service.generateAndApplyTaskSchedule({ userId: 'u1', id: 'plan1' }),
     ).rejects.toMatchObject({ code: AppErrorCode.ANOTHER_PLAN_SCHEDULED });
+  });
+
+  it('agent plans can be scheduled but not re-generated', async () => {
+    const findFirst = jest
+      .fn()
+      .mockResolvedValueOnce({
+        source_type: EPlanSourceType.AGENT,
+        status: EPlanStatus.READY,
+      })
+      .mockResolvedValueOnce({ id: 'other' });
+    const scheduler = new CalendarScheduleService(
+      { plan: { findFirst } } as unknown as PrismaService,
+      calendarService as unknown as CalendarService,
+    );
+    // Past the source guard: stopped by the one-scheduled-plan rule instead.
+    await expect(
+      scheduler.generateAndApplyTaskSchedule({ userId: 'u1', id: 'plan1' }),
+    ).rejects.toMatchObject({ code: AppErrorCode.ANOTHER_PLAN_SCHEDULED });
+
+    const reGeneratePlan = jest.fn();
+    const service = new PlanService(
+      {
+        plan: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'plan1',
+            source_type: EPlanSourceType.AGENT,
+            status: EPlanStatus.READY,
+            tasks: [],
+          }),
+        },
+      } as unknown as PrismaService,
+      {} as UserService,
+      calendarService as unknown as CalendarService,
+      {} as CalendarScheduleService,
+      { reGeneratePlan } as unknown as GeneratePlanService,
+    );
+    await expect(
+      service.reGenerate({
+        userId: 'u1',
+        data: { id: 'plan1', reason: 'make it shorter please' },
+      }),
+    ).rejects.toMatchObject({ code: AppErrorCode.PLAN_SOURCE_NOT_SUPPORTED });
+    expect(reGeneratePlan).not.toHaveBeenCalled();
+  });
+
+  it("schedule rejects another user's plan and DONE plans before any calendar call", async () => {
+    for (const [found, code] of [
+      [null, AppErrorCode.PLAN_NOT_FOUND],
+      [
+        { source_type: EPlanSourceType.GENERATE, status: EPlanStatus.DONE },
+        AppErrorCode.INVALID_TRANSITION,
+      ],
+    ] as const) {
+      const findFirst = jest.fn().mockResolvedValue(found);
+      const service = new CalendarScheduleService(
+        { plan: { findFirst } } as unknown as PrismaService,
+        calendarService as unknown as CalendarService,
+      );
+      await expect(
+        service.generateAndApplyTaskSchedule({ userId: 'u1', id: 'plan1' }),
+      ).rejects.toMatchObject({ code });
+      expect(findFirst).toHaveBeenCalledTimes(1);
+    }
+    expect(calendarService.getClient).not.toHaveBeenCalled();
+  });
+
+  it('schedules only DRAFT or READY plans; resume only books a paused HOLD plan', async () => {
+    const run = async (
+      plan: { status: EPlanStatus; is_paused: boolean },
+      resume?: boolean,
+    ) => {
+      // Second findFirst = "another plan scheduled": reaching it means the
+      // status check let the call through.
+      const findFirst = jest
+        .fn()
+        .mockResolvedValueOnce({
+          source_type: EPlanSourceType.GENERATE,
+          ...plan,
+        })
+        .mockResolvedValueOnce({ id: 'other' });
+      const service = new CalendarScheduleService(
+        { plan: { findFirst } } as unknown as PrismaService,
+        calendarService as unknown as CalendarService,
+      );
+      return service
+        .generateAndApplyTaskSchedule({ userId: 'u1', id: 'plan1', resume })
+        .catch((e: { code: string }) => e.code);
+    };
+    const { DRAFT, READY, SCHEDULED, HOLD } = EPlanStatus;
+
+    expect(await run({ status: DRAFT, is_paused: false })).toBe(
+      AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+    );
+    expect(await run({ status: READY, is_paused: false })).toBe(
+      AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+    );
+    // Booking a SCHEDULED plan again would duplicate its events.
+    expect(await run({ status: SCHEDULED, is_paused: false })).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(await run({ status: HOLD, is_paused: true })).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(await run({ status: READY, is_paused: true })).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(await run({ status: HOLD, is_paused: true }, true)).toBe(
+      AppErrorCode.ANOTHER_PLAN_SCHEDULED,
+    );
+    expect(await run({ status: HOLD, is_paused: false }, true)).toBe(
+      AppErrorCode.INVALID_TRANSITION,
+    );
+    expect(calendarService.getClient).not.toHaveBeenCalled();
   });
 });

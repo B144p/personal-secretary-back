@@ -51,25 +51,47 @@ export class UpdateProgressService {
   }
 
   async updateProgress(props: IUpdateProgressProps) {
+    return this.withProgressLock(props.userId, () =>
+      this.doUpdateProgress(props, 'feedback'),
+    );
+  }
+
+  // Moves slipped and remaining steps of the scheduled plan to the next free
+  // slots without any status change (an agent, or "I fell behind"). Same
+  // pipeline and lock as a feedback update; a feedback row is saved only
+  // when a note is given.
+  async reschedule({ userId, note }: { userId: string; note?: string }) {
+    return this.withProgressLock(userId, () =>
+      this.doUpdateProgress(
+        { userId, data: { statusChanges: [], contextText: note } },
+        'reschedule',
+      ),
+    );
+  }
+
+  private async withProgressLock<T>(userId: string, run: () => Promise<T>) {
     // Guard against a second concurrent call (e.g. double-click, retry) for
     // the same user — each call can create real Google Calendar events
     // before persisting, so a race here would leave one attempt's events
     // orphaned with no DB record, or duplicated outright.
-    if (this.progressLocks.has(props.userId)) {
+    if (this.progressLocks.has(userId)) {
       throw new AppException(
         AppErrorCode.PROGRESS_UPDATE_IN_PROGRESS,
         'A progress update is already in flight for this plan',
       );
     }
-    this.progressLocks.add(props.userId);
+    this.progressLocks.add(userId);
     try {
-      return await this.doUpdateProgress(props);
+      return await run();
     } finally {
-      this.progressLocks.delete(props.userId);
+      this.progressLocks.delete(userId);
     }
   }
 
-  private async doUpdateProgress({ userId, data }: IUpdateProgressProps) {
+  private async doUpdateProgress(
+    { userId, data }: IUpdateProgressProps,
+    mode: 'feedback' | 'reschedule',
+  ) {
     const { statusChanges = [], contextText } = data;
     const deps = {
       prisma: this.prisma,
@@ -77,7 +99,7 @@ export class UpdateProgressService {
       logger: this.logger,
     };
 
-    if (statusChanges.length === 0 && !contextText) {
+    if (mode === 'feedback' && statusChanges.length === 0 && !contextText) {
       throw new AppException(
         AppErrorCode.NO_OP_FEEDBACK,
         'No changes to submit',
@@ -99,6 +121,18 @@ export class UpdateProgressService {
         'No SCHEDULED plan found',
       );
 
+    // Only leaves of this plan can change here. Checked before anything is
+    // written, so a stray id (another plan, a parent task) changes nothing.
+    const planLeafIds = getLeafIds(plan.tasks);
+    const foreign = statusChanges.filter((c) => !planLeafIds.has(c.taskId));
+    if (foreign.length) {
+      throw new AppException(
+        AppErrorCode.TASK_NOT_IN_PLAN,
+        'Some tasks are not steps of the scheduled plan',
+        { taskIds: foreign.map((c) => c.taskId), planId: plan.id },
+      );
+    }
+
     const userState = await this.prisma.userState.findUnique({
       where: { user_id: userId },
     });
@@ -111,14 +145,15 @@ export class UpdateProgressService {
     // 2. Apply status changes
     await applyStatusChanges(plan.id, statusChanges, deps);
 
-    // 3. Persist DailyFeedback
-    await persistDailyFeedback(
-      plan.id,
-      statusChanges,
-      contextText,
-      userState,
-      deps,
-    );
+    // 3. Persist DailyFeedback (a bare reschedule has nothing to record)
+    if (mode === 'feedback' || contextText)
+      await persistDailyFeedback(
+        plan.id,
+        statusChanges,
+        contextText,
+        userState,
+        deps,
+      );
 
     // 4. Re-fetch updated plan tasks
     const updatedPlan = await this.prisma.plan.findUnique({
@@ -178,13 +213,20 @@ export class UpdateProgressService {
     // is always a subset of earlyLeaves (DONE is one of its three
     // statuses), so earlyLeaves.length === 0 already implies it. Safe to
     // drop; kept for now to avoid touching this gate mid-branch.
+    // A reschedule also books remaining steps that have no slot at all,
+    // e.g. ones an earlier repack listed in unscheduledTaskIds.
+    const unbookedLeaves =
+      mode === 'reschedule'
+        ? remainingLeaves.filter((t) => t.events.length === 0)
+        : [];
     if (
       !isCompleting &&
       slippedLeaves.length === 0 &&
       completedEarly.length === 0 &&
       completedLate.length === 0 &&
       heldLeavesWithFutureEvents.length === 0 &&
-      earlyLeaves.length === 0
+      earlyLeaves.length === 0 &&
+      unbookedLeaves.length === 0
     ) {
       return {
         rescheduled: 0,

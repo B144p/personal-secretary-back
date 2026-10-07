@@ -323,4 +323,7 @@ interface IRuleBase {
 export interface IEventPrivateProperties {
   plan_id?: string;
   task_id?: string;
+  // Set on "[<STATUS>] Early task" marker events (update.progress/helpers).
+  early_marker?: string;
+  status?: string;
 }

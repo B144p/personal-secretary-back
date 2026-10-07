@@ -10,7 +10,9 @@ export const listPlansQuerySchema = z.object({
     .enum(['true', 'false'])
     .transform((v) => v === 'true')
     .optional(),
-  source_type: z.enum(['GENERATE', 'CALENDAR', 'CLAUDE_CODE']).optional(),
+  source_type: z
+    .enum(['GENERATE', 'CALENDAR', 'CLAUDE_CODE', 'AGENT'])
+    .optional(),
 });
 
 export type ListPlansQuery = z.infer<typeof listPlansQuerySchema>;
