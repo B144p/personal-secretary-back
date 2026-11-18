@@ -33,7 +33,11 @@ export const bulkUpdateTaskStatusSchema = z
         z.object({
           task_id: z.string().trim().min(1),
           status: z.enum(TASK_STATUS_UPDATES),
-          note: z.string().trim().min(1).max(1000).optional(),
+          // A blank note counts as no note, as in update_task_status.
+          note: z.preprocess(
+            (v) => (typeof v === 'string' && !v.trim() ? undefined : v),
+            z.string().trim().max(1000).optional(),
+          ),
         }),
       )
       .min(1)

@@ -39,9 +39,15 @@ describe('bulkUpdateTaskStatusSchema', () => {
     const missing = parse([{ task_id: 't1', status: 'CANCELLED' }]);
     expect(missing.success).toBe(false);
     expect(missing.error?.issues[0]?.message).toContain('t1');
-    expect(
-      parse([{ task_id: 't1', status: 'CANCELLED', note: '   ' }]).success,
-    ).toBe(false);
+    const blank = parse([{ task_id: 't1', status: 'CANCELLED', note: '   ' }]);
+    expect(blank.success).toBe(false);
+    expect(blank.error?.issues[0]?.message).toContain('t1');
+  });
+
+  it('treats a blank note as no note on other statuses', () => {
+    const r = parse([{ task_id: 't1', status: 'DONE', note: '   ' }]);
+    expect(r.success).toBe(true);
+    expect(r.data?.updates[0]?.note).toBeUndefined();
   });
 
   it('rejects HOLD, which belongs to the calendar flow', () => {
