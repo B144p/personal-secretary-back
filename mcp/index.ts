@@ -31,7 +31,7 @@ if (!(PROFILES as readonly string[]).includes(profile)) {
   process.exit(1);
 }
 
-const server = new McpServer({ name: 'personal-pm', version: '0.4.0' });
+const server = new McpServer({ name: 'personal-pm', version: '0.5.0' });
 const api = createApi({ baseUrl, token });
 registerCoreTools(server, api);
 registerReadTools(server, api);
