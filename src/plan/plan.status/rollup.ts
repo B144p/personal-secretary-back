@@ -93,3 +93,44 @@ export const rollupTaskStatus = ({
 
   return { tasks: changes, plan };
 };
+
+// Several changes at once, in list order. The outcome is what the same single
+// updates would give one by one, so the rules above stay the only rules.
+// Returns every task whose final status differs from where it started,
+// including the listed ones.
+export const rollupTaskStatuses = ({
+  tasks,
+  changes,
+  planStatus,
+}: {
+  tasks: RollupTask[];
+  changes: { id: string; status: ETaskStatus }[];
+  planStatus: EPlanStatus;
+}): RollupResult => {
+  let current = tasks;
+  let plan = planStatus;
+  for (const { id, status } of changes) {
+    const step = rollupTaskStatus({
+      tasks: current,
+      changedId: id,
+      newStatus: status,
+      planStatus: plan,
+    });
+    const next = new Map(step.tasks).set(id, status);
+    current = current.map((t) => ({
+      ...t,
+      status: next.get(t.id) ?? t.status,
+    }));
+    plan = step.plan;
+  }
+
+  const start = new Map(tasks.map((t) => [t.id, t.status]));
+  return {
+    tasks: new Map(
+      current
+        .filter((t) => t.status !== start.get(t.id))
+        .map((t) => [t.id, t.status]),
+    ),
+    plan,
+  };
+};
