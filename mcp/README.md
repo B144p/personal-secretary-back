@@ -12,7 +12,7 @@ Prisma, no DB connection.
 | `create_plan` | Saves a plan-mode plan as a DRAFT plan with nested tasks, tagged with the session's repo and branch (optional `parent_plan_id`) | `POST /plan/import` |
 | `get_plan` | One plan's task tree with ids, statuses and notes | `GET /plan/:id` |
 | `update_task_status` | PENDING / IN_PROGRESS / DONE / CANCELLED (reason required) | `PATCH /plan/:id/tasks/:taskId/status` |
-| `bulk_update_task_status` | Up to 100 status changes for one plan in one transaction; all applied or none, plan tree returned once | `PATCH /plan/:id/task-statuses` |
+| `bulk_update_task_status` | Up to 100 status changes for one plan in one transaction (notes up to 300 characters); all applied or none, plan tree returned once | `PATCH /plan/:id/task-statuses` |
 | `add_task` | Adds a step found mid-work, with the reason | `POST /plan/:id/tasks` |
 | `get_repo_context` | The open plan of the session's repo: open steps, cancelled reasons, other open plans | `GET /context?repo_key=&branch=` |
 | `get_today` | The user's day(s): plan steps, calendar events, slipped steps, Claude Code work in progress | `GET /agenda?date=&days=` |

@@ -9,6 +9,7 @@ import {
   importTaskNodeSchema,
 } from '../src/plan/dto/import-plan.dto';
 import {
+  BULK_TASK_STATUS_MAX_NOTE,
   BULK_TASK_STATUS_MAX_UPDATES,
   bulkUpdateTaskStatusSchema,
   TASK_STATUS_UPDATES,
@@ -295,7 +296,9 @@ export const registerClaudeCodeTools = (server: McpServer, api: Api) => {
               note: z
                 .string()
                 .optional()
-                .describe('Why the status changed. Required for CANCELLED.'),
+                .describe(
+                  `Why the status changed, up to ${BULK_TASK_STATUS_MAX_NOTE} characters. Required for CANCELLED.`,
+                ),
             }),
           )
           .describe(

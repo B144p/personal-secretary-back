@@ -1,4 +1,5 @@
 import {
+  BULK_TASK_STATUS_MAX_NOTE,
   BULK_TASK_STATUS_MAX_UPDATES,
   bulkUpdateTaskStatusSchema,
   updateTaskStatusSchema,
@@ -42,6 +43,28 @@ describe('bulkUpdateTaskStatusSchema', () => {
     const blank = parse([{ task_id: 't1', status: 'CANCELLED', note: '   ' }]);
     expect(blank.success).toBe(false);
     expect(blank.error?.issues[0]?.message).toContain('t1');
+  });
+
+  it('rejects a note over the limit', () => {
+    const note = 'x'.repeat(BULK_TASK_STATUS_MAX_NOTE + 1);
+    expect(parse([{ task_id: 't1', status: 'DONE', note }]).success).toBe(
+      false,
+    );
+  });
+
+  it('keeps the largest valid list under the 100 KB body limit', () => {
+    const updates = Array.from(
+      { length: BULK_TASK_STATUS_MAX_UPDATES },
+      (_, i) => ({
+        task_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        status: 'IN_PROGRESS',
+        note: 'ก'.repeat(BULK_TASK_STATUS_MAX_NOTE),
+      }),
+    );
+    expect(parse(updates).success).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify({ updates }))).toBeLessThan(
+      100 * 1024,
+    );
   });
 
   it('treats a blank note as no note on other statuses', () => {

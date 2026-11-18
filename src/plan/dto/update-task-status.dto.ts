@@ -23,6 +23,9 @@ export const updateTaskStatusSchema = z
 export type UpdateTaskStatusDto = z.infer<typeof updateTaskStatusSchema>;
 
 export const BULK_TASK_STATUS_MAX_UPDATES = 100;
+// Shorter than a single update's note: a full list of full notes in a
+// three-byte script (e.g. Thai) must still fit the 100 KB JSON body limit.
+export const BULK_TASK_STATUS_MAX_NOTE = 300;
 
 // Several status changes for one plan, applied together. Errors name the task
 // so the caller can fix the whole list in one retry.
@@ -36,7 +39,7 @@ export const bulkUpdateTaskStatusSchema = z
           // A blank note counts as no note, as in update_task_status.
           note: z.preprocess(
             (v) => (typeof v === 'string' && !v.trim() ? undefined : v),
-            z.string().trim().max(1000).optional(),
+            z.string().trim().max(BULK_TASK_STATUS_MAX_NOTE).optional(),
           ),
         }),
       )
