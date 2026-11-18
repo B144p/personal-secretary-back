@@ -222,7 +222,7 @@ const send = async (sessionId: string, pending: Pending) => {
 const savedContext = (plan: PlanOut) =>
   [
     `Saved as Personal Secretary plan automatically (plan hook). Do not call personal-pm create_plan for this plan.`,
-    `While implementing, call personal-pm update_task_status as steps start (IN_PROGRESS), finish (DONE) or turn out unnecessary (CANCELLED, with the reason as note), and add_task for new steps.`,
+    `While implementing, call personal-pm update_task_status as steps start (IN_PROGRESS), finish (DONE) or turn out unnecessary (CANCELLED, with the reason as note), and add_task for new steps. When several steps change together, send them in one bulk_update_task_status call.`,
     planSummary(plan),
   ].join('\n');
 

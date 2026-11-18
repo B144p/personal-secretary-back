@@ -143,7 +143,8 @@ installed) and you are about to implement a plan-mode plan, call
 personal-pm create_plan once, before any file edit.
 While implementing, call personal-pm update_task_status: IN_PROGRESS when
 you start a step, DONE when it is finished, CANCELLED with the reason as
-note when a step turns out unnecessary. Use add_task only for steps you
+note when a step turns out unnecessary. When several steps change together,
+send them in one bulk_update_task_status call. Use add_task only for steps you
 discover while implementing the current plan. A new feature or new
 requirement is not a new step: it needs a new plan in plan mode. Outside
 plan mode, don't create plans or add tasks for it. When planning a
