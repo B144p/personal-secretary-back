@@ -24,7 +24,10 @@ import {
   rescheduleSchema,
   updateProgressSchema,
 } from './dto/update-progress.dto';
-import { updateTaskStatusSchema } from './dto/update-task-status.dto';
+import {
+  bulkUpdateTaskStatusSchema,
+  updateTaskStatusSchema,
+} from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
 import { PlanService } from './plan.service';
 import { PlanTaskStatusService } from './plan.status';
@@ -134,6 +137,23 @@ export class PlanController {
       userId: validateJwtPayload(req.user).sub,
       planId,
       taskId,
+      dto: parsed.data,
+    });
+  }
+
+  // Several status changes at once: all applied, or none.
+  @Patch(':planId/task-statuses')
+  async bulkUpdateTaskStatus(
+    @Req() req: Request,
+    @Param('planId') planId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = bulkUpdateTaskStatusSchema.safeParse(body);
+    if (!parsed.success)
+      throw new BadRequestException(parsed.error.issues[0]?.message);
+    return await this.planTaskStatusService.bulkUpdateStatus({
+      userId: validateJwtPayload(req.user).sub,
+      planId,
       dto: parsed.data,
     });
   }

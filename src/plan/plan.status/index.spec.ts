@@ -29,7 +29,7 @@ describe('PlanTaskStatusService', () => {
           .mockResolvedValue({ id: 'plan1', tasks: [] }),
         update: jest.fn(),
       },
-      task: { update: jest.fn() },
+      task: { update: jest.fn(), updateMany: jest.fn() },
       taskEvent: {
         create: jest.fn(),
         createMany: jest.fn(),
@@ -126,5 +126,109 @@ describe('PlanTaskStatusService', () => {
       }),
     ).rejects.toMatchObject({ code: AppErrorCode.PLAN_SOURCE_NOT_SUPPORTED });
     expect(tx.task.update).not.toHaveBeenCalled();
+  });
+
+  describe('bulkUpdateStatus', () => {
+    const bulk = (
+      service: PlanTaskStatusService,
+      updates: Parameters<
+        PlanTaskStatusService['bulkUpdateStatus']
+      >[0]['dto']['updates'],
+    ) =>
+      service.bulkUpdateStatus({
+        userId: 'u1',
+        planId: 'plan1',
+        dto: { updates },
+      });
+
+    it('uses one lock, one plan update and one tree load, and never writes TaskEvents', async () => {
+      const { tx, calls, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+      await bulk(service, [
+        { task_id: 'A1', status: 'CANCELLED', note: 'dropped' },
+      ]);
+
+      expect(calls.slice(0, 2)).toEqual(['lock', 'read']);
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(tx.plan.update).toHaveBeenCalledTimes(1);
+      expect(tx.plan.update).toHaveBeenCalledWith({
+        where: { id: 'plan1' },
+        data: {
+          status: EPlanStatus.DONE,
+          last_activity_at: expect.any(Date) as Date,
+        },
+      });
+      // The first read is the rollup input, the second is the returned tree.
+      expect(tx.plan.findUnique).toHaveBeenCalledTimes(2);
+      expect(tx.taskEvent.create).not.toHaveBeenCalled();
+      expect(tx.taskEvent.createMany).not.toHaveBeenCalled();
+      expect(tx.taskEvent.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('stores the note on listed tasks and leaves the note of rolled-up parents alone', async () => {
+      const { tx, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+      await bulk(service, [
+        { task_id: 'A1', status: 'CANCELLED', note: 'dropped' },
+      ]);
+
+      expect(tx.task.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['A1'] }, plan_id: 'plan1' },
+        data: { status: ETaskStatus.CANCELLED, status_note: 'dropped' },
+      });
+      expect(tx.task.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['A'] }, plan_id: 'plan1' },
+        data: { status: ETaskStatus.CANCELLED },
+      });
+    });
+
+    it('writes the final status when a later parent close overrides a listed child', async () => {
+      const { tx, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+      await bulk(service, [
+        { task_id: 'A1', status: 'IN_PROGRESS', note: 'started' },
+        { task_id: 'A', status: 'CANCELLED', note: 'dropped' },
+      ]);
+
+      expect(tx.task.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['A1'] }, plan_id: 'plan1' },
+        data: { status: ETaskStatus.CANCELLED, status_note: 'started' },
+      });
+    });
+
+    it('groups tasks with the same status and note into one write', async () => {
+      const { tx, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+      await bulk(service, [
+        { task_id: 'A1', status: 'DONE' },
+        { task_id: 'A', status: 'DONE' },
+      ]);
+
+      expect(tx.task.updateMany).toHaveBeenCalledTimes(1);
+      expect(tx.task.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['A1', 'A'] }, plan_id: 'plan1' },
+        data: { status: ETaskStatus.DONE, status_note: null },
+      });
+    });
+
+    it('writes nothing when any id is not in the plan, and names every bad id', async () => {
+      const { tx, service } = makeService(EPlanSourceType.CLAUDE_CODE);
+      await expect(
+        bulk(service, [
+          { task_id: 'A1', status: 'DONE' },
+          { task_id: 'nope', status: 'DONE' },
+          { task_id: 'gone', status: 'DONE' },
+        ]),
+      ).rejects.toMatchObject({
+        code: AppErrorCode.TASK_NOT_IN_PLAN,
+        details: { task_ids: ['nope', 'gone'] },
+      });
+      expect(tx.task.updateMany).not.toHaveBeenCalled();
+      expect(tx.plan.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects plans that did not come from Claude Code', async () => {
+      const { tx, service } = makeService(EPlanSourceType.GENERATE);
+      await expect(
+        bulk(service, [{ task_id: 'A1', status: 'DONE' }]),
+      ).rejects.toMatchObject({ code: AppErrorCode.PLAN_SOURCE_NOT_SUPPORTED });
+      expect(tx.task.updateMany).not.toHaveBeenCalled();
+    });
   });
 });
