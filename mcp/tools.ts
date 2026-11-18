@@ -12,6 +12,7 @@ import {
   BULK_TASK_STATUS_MAX_NOTE,
   BULK_TASK_STATUS_MAX_UPDATES,
   bulkUpdateTaskStatusSchema,
+  formatBulkTaskStatusError,
   TASK_STATUS_UPDATES,
 } from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
@@ -312,7 +313,7 @@ export const registerClaudeCodeTools = (server: McpServer, api: Api) => {
       if (!parsed.success) {
         return {
           ...text(
-            `Invalid updates: ${parsed.error.issues.map((i) => i.message).join('; ')}`,
+            `Invalid updates: ${formatBulkTaskStatusError(parsed.error)}`,
           ),
           isError: true,
         };

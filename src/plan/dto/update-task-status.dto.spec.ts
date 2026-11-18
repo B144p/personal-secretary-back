@@ -2,6 +2,7 @@ import {
   BULK_TASK_STATUS_MAX_NOTE,
   BULK_TASK_STATUS_MAX_UPDATES,
   bulkUpdateTaskStatusSchema,
+  formatBulkTaskStatusError,
   updateTaskStatusSchema,
 } from './update-task-status.dto';
 
@@ -43,6 +44,22 @@ describe('bulkUpdateTaskStatusSchema', () => {
     const blank = parse([{ task_id: 't1', status: 'CANCELLED', note: '   ' }]);
     expect(blank.success).toBe(false);
     expect(blank.error?.issues[0]?.message).toContain('t1');
+  });
+
+  it('reports every bad entry in one message, with its position', () => {
+    const r = parse([
+      { task_id: 't1', status: 'CANCELLED' },
+      { task_id: 't2', status: 'DONE' },
+      { task_id: 't3', status: 'HOLD' },
+      { task_id: 't4', status: 'CANCELLED', note: '  ' },
+    ]);
+    const message = formatBulkTaskStatusError(r.error!);
+    expect(message).toContain('Update 1 (note)');
+    expect(message).toContain('cancelling task t1');
+    expect(message).toContain('Update 3 (status)');
+    expect(message).toContain('Update 4 (note)');
+    expect(message).toContain('cancelling task t4');
+    expect(message).not.toContain('Update 2');
   });
 
   it('rejects a note over the limit', () => {

@@ -33,22 +33,33 @@ export const bulkUpdateTaskStatusSchema = z
   .object({
     updates: z
       .array(
-        z.object({
-          task_id: z.string().trim().min(1),
-          status: z.enum(TASK_STATUS_UPDATES),
-          // A blank note counts as no note, as in update_task_status.
-          note: z.preprocess(
-            (v) => (typeof v === 'string' && !v.trim() ? undefined : v),
-            z.string().trim().max(BULK_TASK_STATUS_MAX_NOTE).optional(),
-          ),
-        }),
+        z
+          .object({
+            task_id: z.string().trim().min(1),
+            status: z.enum(TASK_STATUS_UPDATES),
+            // A blank note counts as no note, as in update_task_status.
+            note: z.preprocess(
+              (v) => (typeof v === 'string' && !v.trim() ? undefined : v),
+              z.string().trim().max(BULK_TASK_STATUS_MAX_NOTE).optional(),
+            ),
+          })
+          // Checked per entry so one bad entry doesn't hide the others.
+          .superRefine(({ task_id, status, note }, ctx) => {
+            if (status === 'CANCELLED' && !note) {
+              ctx.addIssue({
+                code: 'custom',
+                path: ['note'],
+                message: `A note (the reason) is required when cancelling task ${task_id}`,
+              });
+            }
+          }),
       )
       .min(1)
       .max(BULK_TASK_STATUS_MAX_UPDATES),
   })
   .superRefine(({ updates }, ctx) => {
     const seen = new Set<string>();
-    updates.forEach(({ task_id, status, note }, i) => {
+    updates.forEach(({ task_id }, i) => {
       if (seen.has(task_id)) {
         ctx.addIssue({
           code: 'custom',
@@ -57,15 +68,19 @@ export const bulkUpdateTaskStatusSchema = z
         });
       }
       seen.add(task_id);
-      if (status === 'CANCELLED' && !note) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['updates', i, 'note'],
-          message: `A note (the reason) is required when cancelling task ${task_id}`,
-        });
-      }
     });
   });
+
+// Every problem in one message, each tied to its place in the list.
+export const formatBulkTaskStatusError = (error: z.ZodError) =>
+  error.issues
+    .map(({ path, message }) => {
+      const [, index, field] = path;
+      if (typeof index !== 'number') return message;
+      const where = field ? ` (${String(field)})` : '';
+      return `Update ${index + 1}${where}: ${message}`;
+    })
+    .join('; ');
 
 export type BulkUpdateTaskStatusDto = z.infer<
   typeof bulkUpdateTaskStatusSchema

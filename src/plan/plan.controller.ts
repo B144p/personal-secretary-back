@@ -26,6 +26,7 @@ import {
 } from './dto/update-progress.dto';
 import {
   bulkUpdateTaskStatusSchema,
+  formatBulkTaskStatusError,
   updateTaskStatusSchema,
 } from './dto/update-task-status.dto';
 import { PlanImportService } from './plan.import';
@@ -150,7 +151,7 @@ export class PlanController {
   ) {
     const parsed = bulkUpdateTaskStatusSchema.safeParse(body);
     if (!parsed.success)
-      throw new BadRequestException(parsed.error.issues[0]?.message);
+      throw new BadRequestException(formatBulkTaskStatusError(parsed.error));
     return await this.planTaskStatusService.bulkUpdateStatus({
       userId: validateJwtPayload(req.user).sub,
       planId,
