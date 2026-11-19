@@ -21,3 +21,67 @@ export const updateTaskStatusSchema = z
   });
 
 export type UpdateTaskStatusDto = z.infer<typeof updateTaskStatusSchema>;
+
+export const BULK_TASK_STATUS_MAX_UPDATES = 100;
+// Shorter than a single update's note: a full list of full notes in a
+// three-byte script (e.g. Thai) must still fit the 100 KB JSON body limit.
+export const BULK_TASK_STATUS_MAX_NOTE = 300;
+
+// Several status changes for one plan, applied together. Errors name the task
+// so the caller can fix the whole list in one retry.
+export const bulkUpdateTaskStatusSchema = z
+  .object({
+    updates: z
+      .array(
+        z
+          .object({
+            task_id: z.string().trim().min(1),
+            status: z.enum(TASK_STATUS_UPDATES),
+            // A blank note counts as no note, as in update_task_status.
+            note: z.preprocess(
+              (v) => (typeof v === 'string' && !v.trim() ? undefined : v),
+              z.string().trim().max(BULK_TASK_STATUS_MAX_NOTE).optional(),
+            ),
+          })
+          // Checked per entry so one bad entry doesn't hide the others.
+          .superRefine(({ task_id, status, note }, ctx) => {
+            if (status === 'CANCELLED' && !note) {
+              ctx.addIssue({
+                code: 'custom',
+                path: ['note'],
+                message: `A note (the reason) is required when cancelling task ${task_id}`,
+              });
+            }
+          }),
+      )
+      .min(1)
+      .max(BULK_TASK_STATUS_MAX_UPDATES),
+  })
+  .superRefine(({ updates }, ctx) => {
+    const seen = new Set<string>();
+    updates.forEach(({ task_id }, i) => {
+      if (seen.has(task_id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['updates', i, 'task_id'],
+          message: `Task ${task_id} is listed more than once`,
+        });
+      }
+      seen.add(task_id);
+    });
+  });
+
+// Every problem in one message, each tied to its place in the list.
+export const formatBulkTaskStatusError = (error: z.ZodError) =>
+  error.issues
+    .map(({ path, message }) => {
+      const [, index, field] = path;
+      if (typeof index !== 'number') return message;
+      const where = field ? ` (${String(field)})` : '';
+      return `Update ${index + 1}${where}: ${message}`;
+    })
+    .join('; ');
+
+export type BulkUpdateTaskStatusDto = z.infer<
+  typeof bulkUpdateTaskStatusSchema
+>;

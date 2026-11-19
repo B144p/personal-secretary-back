@@ -175,7 +175,7 @@ export const buildRepoContext = ({
       : notes.length
         ? [`Older plans${staleNote}.`]
         : []),
-    'Report steps with update_task_status; get_plan shows the full tree.',
+    'Report steps with update_task_status, or bulk_update_task_status when several change together; get_plan shows the full tree.',
   ];
 
   const cancelledLines = cancelled.map(

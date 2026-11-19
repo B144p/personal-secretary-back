@@ -12,6 +12,7 @@ Prisma, no DB connection.
 | `create_plan` | Saves a plan-mode plan as a DRAFT plan with nested tasks, tagged with the session's repo and branch (optional `parent_plan_id`) | `POST /plan/import` |
 | `get_plan` | One plan's task tree with ids, statuses and notes | `GET /plan/:id` |
 | `update_task_status` | PENDING / IN_PROGRESS / DONE / CANCELLED (reason required) | `PATCH /plan/:id/tasks/:taskId/status` |
+| `bulk_update_task_status` | Up to 100 status changes for one plan in one transaction (notes up to 300 characters); all applied or none, plan tree returned once | `PATCH /plan/:id/task-statuses` |
 | `add_task` | Adds a step found mid-work, with the reason | `POST /plan/:id/tasks` |
 | `get_repo_context` | The open plan of the session's repo: open steps, cancelled reasons, other open plans | `GET /context?repo_key=&branch=` |
 | `get_today` | The user's day(s): plan steps, calendar events, slipped steps, Claude Code work in progress | `GET /agenda?date=&days=` |
@@ -36,7 +37,7 @@ opt in, so coding sessions keep the rule "never books calendar events".
 
 | Profile | Tools |
 |---|---|
-| `claude-code` (default) | `whoami`, `list_plans`, `get_plan`, `get_today`, `get_progress`, `create_plan`, `update_task_status`, `add_task`, `get_repo_context` |
+| `claude-code` (default) | `whoami`, `list_plans`, `get_plan`, `get_today`, `get_progress`, `create_plan`, `update_task_status`, `bulk_update_task_status`, `add_task`, `get_repo_context` |
 | `agent` | `whoami`, `list_plans`, `get_plan`, `get_today`, `get_progress`, `report_progress`, `reschedule`, `create_agent_plan`, `schedule_plan` |
 | `all` | both |
 
@@ -142,7 +143,8 @@ installed) and you are about to implement a plan-mode plan, call
 personal-pm create_plan once, before any file edit.
 While implementing, call personal-pm update_task_status: IN_PROGRESS when
 you start a step, DONE when it is finished, CANCELLED with the reason as
-note when a step turns out unnecessary. Use add_task only for steps you
+note when a step turns out unnecessary. When several steps change together,
+send them in one bulk_update_task_status call. Use add_task only for steps you
 discover while implementing the current plan. A new feature or new
 requirement is not a new step: it needs a new plan in plan mode. Outside
 plan mode, don't create plans or add tasks for it. When planning a
@@ -156,7 +158,7 @@ To skip the first-use permission prompt for these tools, add to
 `~/.claude/settings.json`:
 
 ```json
-{ "permissions": { "allow": ["mcp__personal-pm__get_plan", "mcp__personal-pm__update_task_status", "mcp__personal-pm__add_task", "mcp__personal-pm__create_plan", "mcp__personal-pm__list_plans", "mcp__personal-pm__get_repo_context"] } }
+{ "permissions": { "allow": ["mcp__personal-pm__get_plan", "mcp__personal-pm__update_task_status", "mcp__personal-pm__bulk_update_task_status", "mcp__personal-pm__add_task", "mcp__personal-pm__create_plan", "mcp__personal-pm__list_plans", "mcp__personal-pm__get_repo_context"] } }
 ```
 
 ## Development

@@ -1,5 +1,10 @@
 import { EPlanStatus, ETaskStatus } from '@prisma/client';
-import { rollupTaskStatus, type RollupTask, activePlanStatus } from './rollup';
+import {
+  activePlanStatus,
+  rollupTaskStatus,
+  rollupTaskStatuses,
+  type RollupTask,
+} from './rollup';
 
 const { PENDING, IN_PROGRESS, DONE, CANCELLED } = ETaskStatus;
 
@@ -72,5 +77,104 @@ describe('rollupTaskStatus', () => {
     expect(activePlanStatus(EPlanStatus.HOLD, false)).toBe(EPlanStatus.READY);
     expect(activePlanStatus(EPlanStatus.HOLD, true)).toBe(EPlanStatus.HOLD);
     expect(activePlanStatus(EPlanStatus.DRAFT, false)).toBe(EPlanStatus.DRAFT);
+  });
+});
+
+describe('rollupTaskStatuses', () => {
+  const runAll = (
+    tasks: RollupTask[],
+    changes: [string, ETaskStatus][],
+    planStatus: EPlanStatus = EPlanStatus.READY,
+  ) =>
+    rollupTaskStatuses({
+      tasks,
+      changes: changes.map(([id, status]) => ({ id, status })),
+      planStatus,
+    });
+
+  it('closes the parent when siblings close in the same batch', () => {
+    const r = runAll(tree(), [
+      ['A1', DONE],
+      ['A2', CANCELLED],
+    ]);
+    expect(Object.fromEntries(r.tasks)).toEqual({
+      A: DONE,
+      A1: DONE,
+      A2: CANCELLED,
+    });
+    expect(r.plan).toBe(EPlanStatus.READY);
+  });
+
+  it('marks the plan DONE when the batch closes every top-level task', () => {
+    const r = runAll(tree(), [
+      ['A1', DONE],
+      ['A2', DONE],
+      ['B', DONE],
+    ]);
+    expect(r.plan).toBe(EPlanStatus.DONE);
+  });
+
+  it('lets a later parent close override an earlier open child', () => {
+    const r = runAll(tree(), [
+      ['A1', IN_PROGRESS],
+      ['A', CANCELLED],
+    ]);
+    expect(Object.fromEntries(r.tasks)).toEqual({
+      A: CANCELLED,
+      A1: CANCELLED,
+      A2: CANCELLED,
+    });
+  });
+
+  it('applies changes in list order', () => {
+    const r = runAll(tree(), [
+      ['A', CANCELLED],
+      ['A1', IN_PROGRESS],
+    ]);
+    expect(Object.fromEntries(r.tasks)).toEqual({
+      A: IN_PROGRESS,
+      A1: IN_PROGRESS,
+      A2: CANCELLED,
+    });
+  });
+
+  it('reopens a DONE plan and its closed parent', () => {
+    const r = runAll(
+      tree({ A: DONE, A1: DONE, A2: DONE, B: DONE }),
+      [['A2', PENDING]],
+      EPlanStatus.DONE,
+    );
+    expect(r.plan).toBe(EPlanStatus.READY);
+    expect(Object.fromEntries(r.tasks)).toEqual({
+      A: IN_PROGRESS,
+      A2: PENDING,
+    });
+  });
+
+  it('matches the same updates made one by one', () => {
+    const first = run(tree(), 'A1', DONE);
+    const afterFirst = tree({ A1: DONE, A: first.tasks.get('A') });
+    const second = run(afterFirst, 'B', IN_PROGRESS, first.plan);
+
+    const r = runAll(
+      tree(),
+      [
+        ['A1', DONE],
+        ['B', IN_PROGRESS],
+      ],
+      EPlanStatus.DRAFT,
+    );
+    expect(r.plan).toBe(second.plan);
+    expect(Object.fromEntries(r.tasks)).toEqual({
+      A: first.tasks.get('A'),
+      A1: DONE,
+      B: IN_PROGRESS,
+    });
+  });
+
+  it('does not mutate the task list it is given', () => {
+    const tasks = tree();
+    runAll(tasks, [['A1', DONE]]);
+    expect(tasks).toEqual(tree());
   });
 });

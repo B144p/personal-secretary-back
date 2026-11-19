@@ -8,7 +8,13 @@ import {
   importPlanSchema,
   importTaskNodeSchema,
 } from '../src/plan/dto/import-plan.dto';
-import { TASK_STATUS_UPDATES } from '../src/plan/dto/update-task-status.dto';
+import {
+  BULK_TASK_STATUS_MAX_NOTE,
+  BULK_TASK_STATUS_MAX_UPDATES,
+  bulkUpdateTaskStatusSchema,
+  formatBulkTaskStatusError,
+  TASK_STATUS_UPDATES,
+} from '../src/plan/dto/update-task-status.dto';
 import { ApiError, type Api } from './api';
 import { repoInfo, sessionRepo } from './git';
 
@@ -264,6 +270,62 @@ export const registerClaudeCodeTools = (server: McpServer, api: Api) => {
           { status, ...(note?.trim() && { note: note.trim() }) },
         );
         return text(`Updated. ${planSummary(plan)}`);
+      } catch (err) {
+        return fail(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    'bulk_update_task_status',
+    {
+      title: 'Bulk update task status',
+      description: [
+        'Change the status of several tasks of one Claude Code plan in a single call, for example when closing finished steps or a whole plan.',
+        'All-or-nothing: if any task id is invalid or any entry fails validation, nothing changes.',
+        'Updates apply in list order, with the same result as the same update_task_status calls made one by one. Each task may appear once.',
+        'CANCELLED requires a note with the reason.',
+        'Parent tasks and the plan status follow automatically, and the plan tree is returned once.',
+      ].join(' '),
+      inputSchema: {
+        plan_id: z.string().describe('Plan id'),
+        updates: z
+          .array(
+            z.object({
+              task_id: z.string().describe('Task id (see get_plan)'),
+              status: z.enum(TASK_STATUS_UPDATES),
+              note: z
+                .string()
+                .optional()
+                .describe(
+                  `Why the status changed, up to ${BULK_TASK_STATUS_MAX_NOTE} characters. Required for CANCELLED.`,
+                ),
+            }),
+          )
+          .describe(
+            `Status changes to apply, 1 to ${BULK_TASK_STATUS_MAX_UPDATES} tasks`,
+          ),
+      },
+    },
+    async ({ plan_id, updates }) => {
+      // Same schema the backend enforces — fail fast with a readable message.
+      const parsed = bulkUpdateTaskStatusSchema.safeParse({ updates });
+      if (!parsed.success) {
+        return {
+          ...text(
+            `Invalid updates: ${formatBulkTaskStatusError(parsed.error)}`,
+          ),
+          isError: true,
+        };
+      }
+      try {
+        const plan = await api.patch<PlanOut>(
+          `/plan/${encodeURIComponent(plan_id)}/task-statuses`,
+          parsed.data,
+        );
+        return text(
+          `Updated ${parsed.data.updates.length} tasks. ${planSummary(plan)}`,
+        );
       } catch (err) {
         return fail(err);
       }
